@@ -117,6 +117,12 @@ function assert_contains(haystack, needle, msg)
     end
 end
 
+function assert_not_contains(haystack, needle, msg)
+    if type(haystack) ~= "string" or haystack:find(needle, 1, true) then
+        fail(string.format("%s: %s contains %s", msg or "unexpected text", describeValue(haystack), describeValue(needle)))
+    end
+end
+
 function __summary()
     return results.passed, results.failed
 end

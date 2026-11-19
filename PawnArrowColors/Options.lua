@@ -39,14 +39,28 @@ function ns.ScaleText(scale, list)
     return scale.label
 end
 
+-- Why nothing is colored while the addon is not set up (Pawn missing, another Pawn version, or Pawn
+-- not ready yet).
+local function printPawnProblem()
+    local problem = ns.pawnProblem or "Pawn is not available"
+    if ns.setupPending then
+        ns.Print(problem .. "; trying again, nothing is colored yet.")
+    elseif ns.warned.pawn then
+        ns.Print(problem .. "; nothing is colored.")
+    else
+        ns.Print(problem .. "; nothing is colored. /pac refresh tries again.")
+    end
+end
+
 local function printStatus()
     if not ns.loggedIn then
         ns.Print("not ready yet; try again after the login.")
         return
     end
+    ns.RetrySetup() -- after the set-up gave up: Pawn may be ready by now
     ns.Print(string.format("arrow colors %s, yellow style: %s.", ns.db.enabled and "on" or "off", styleName(ns.db.style)))
     if not ns.pawnOK then
-        ns.Print("Pawn is not available, nothing is colored.")
+        printPawnProblem()
         return
     end
     local main, isSaved = ns.ResolveMainScale()
@@ -69,7 +83,7 @@ end
 local function printList()
     local list = ns.GetVisibleScales()
     if #list == 0 then
-        ns.Print(ns.PawnReady() and "Pawn shows no scale for this character." or "Pawn is not ready.")
+        ns.Print(ns.IsPawnReady() and "Pawn shows no scale for this character." or "Pawn is not ready.")
         return
     end
     local main = ns.ResolveMainScale()
@@ -88,7 +102,7 @@ local function printHelp()
     print("  /pac main default - first visible scale as the main scale")
     print("  /pac on | off - color the arrows or leave them all green")
     print("  /pac style yellow | tint - own yellow arrow, or the original arrow tinted yellow")
-    print("  /pac refresh - forget the cached results and repaint")
+    print("  /pac refresh - forget the cached results and repaint; checks Pawn again if it was not ready")
     print("  /pac options - open the settings page")
 end
 
@@ -139,8 +153,14 @@ function ns.SlashCommand(input)
             ns.Print("style is yellow or tint.")
         end
     elseif cmd == "refresh" then
-        ns.Invalidate()
-        ns.Print("cache cleared.")
+        if ns.setupDone then
+            ns.Invalidate()
+            ns.Print("cache cleared.")
+        elseif ns.RetrySetup() then
+            ns.Print("Pawn is ready; the arrows are colored now.")
+        else
+            printPawnProblem()
+        end
     elseif cmd == "options" or cmd == "config" then
         if ns.settingsCategory and Settings and Settings.OpenToCategory then
             Settings.OpenToCategory(ns.settingsCategory:GetID())

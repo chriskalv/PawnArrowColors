@@ -3,7 +3,7 @@
   "private": true,
   "description": "Pawn Arrow Colors for WoW Forever; development tools (Lua test runner, arrow texture generator, release zip). Not part of the addon release.",
   "scripts": {
-    "test": "node tools/addon_test.mjs PawnArrowColors && node --test tests/release.test.mjs tests/arrow.test.mjs",
+    "test": "node tools/addon_test.mjs PawnArrowColors && node --test tests/release.test.mjs tests/arrow.test.mjs tests/pawn_names.test.mjs",
     "arrow": "node tools/make_arrow.mjs",
     "release": "node tools/release.mjs PawnArrowColors"
   },

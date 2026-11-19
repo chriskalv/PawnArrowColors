@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- Fixed: version 1.0.0 never saw Pawn as ready in the game (it checked a flag that Pawn keeps private), so `/pac` said "Pawn is not available" and no arrow was colored; the addon now asks Pawn through its public function `PawnIsReady`.
+- If Pawn was not ready within ten seconds after the login, `/pac` and `/pac refresh` now look for Pawn again instead of staying off until the next reload.
+- `/pac` names the reason when nothing is colored (Pawn not loaded, a Pawn function missing, or Pawn not ready yet).
+
 ## 1.0.0
 
 First version.

@@ -27,7 +27,7 @@ The main scale is saved per character by Pawn's internal scale name. Default: th
 | `/pac main default` | back to the default (first visible scale) |
 | `/pac on`, `/pac off`, `/pac toggle` | color the arrows, or leave every arrow green |
 | `/pac style yellow`, `/pac style tint` | the own yellow arrow (default), or the original arrow desaturated and tinted yellow |
-| `/pac refresh` | forget the cached results and repaint |
+| `/pac refresh` | forget the cached results and repaint; if Pawn was not ready after the login, look for Pawn again |
 | `/pac options` | open the settings page |
 
 `/pawnarrowcolors` works like `/pac`. The same settings are on the page *Options > AddOns > Pawn Arrow Colors*: a checkbox for the colors, a dropdown with the visible scales and a dropdown for the style.
@@ -38,9 +38,15 @@ The main scale is saved per character by Pawn's internal scale name. Default: th
 - **Blizzard bags**: secure hooks on the arrow texture of each bag button (`SetShown`, `Show`, `Hide`), found through post-hooks on the bag frames' `UpdateItems`. They follow every change Pawn makes to the arrow, including Pawn's delayed retries.
 - For each item link the addon asks Pawn once which visible scales the item is an upgrade for and remembers the answer. The answers are forgotten when Pawn resets its bag arrows (scale or option changes in Pawn, and Pawn's own check after a gear change), when you choose another main scale, and one second after a gear change if Pawn has not reset its arrows by then (in combat Pawn waits); the visible arrows are then repainted on the next frame.
 - A yellow arrow is put back to its original state (graphic, texture coordinates, color, saturation) as soon as the button shows a main-scale upgrade, no arrow or the colors are turned off.
-- If Pawn or ElvUI lack a function the addon expects (another version), the affected part turns itself off and says so once in the chat.
+- The addon starts when Pawn reports through its public function `PawnIsReady` that it can rate items (right after the login, or up to ten seconds later). It only uses Pawn's public functions and settings: `PawnIsReady`, `PawnGetItemData`, `PawnIsItemAnUpgrade`, `PawnGetAllScalesEx`, `PawnResetBags` and `PawnCommon`.
+- If Pawn or ElvUI lack a function the addon expects (another version), the affected part turns itself off and says so once in the chat; `/pac` names the reason. If Pawn was not ready in time, `/pac` and `/pac refresh` look for it again.
 - The addon writes no fields to Blizzard's or ElvUI's frames; the only change to Blizzard's arrow textures is the secure hooks (`hooksecurefunc`) on `SetShown`, `Show` and `Hide`, the same kind of hook Pawn itself uses.
+
+## Checked in the game
+
+- Version 1.0.0 did not recognize Pawn in WoW Forever (Pawn 2.14.4 with ElvUI): `/pac` reported "Pawn is not available" and no arrow was colored. It read Pawn's initialization flag, which Pawn keeps local to its own file. Version 1.0.1 asks Pawn's public function `PawnIsReady` instead; the tests now hide that flag in the stand-in of Pawn as Pawn does, and a test checks that the addon uses only Pawn's public names.
+- Version 1.0.1 itself is not checked in the game yet.
 
 ## Not checked in the game yet
 
-This first version is tested against stand-ins of Pawn, ElvUI and Blizzard's bags, not yet in the client. To check in WoW Forever: the yellow arrow's position and size next to the green one (ElvUI and Blizzard bags), the default main scale with Pawn Forever's scales, a scale hidden in Pawn, a gear change, the ElvUI bank, the settings page, `/reload` with the saved main scale, and no taint message when you use a bag item in combat (Blizzard bags).
+The rest is tested against stand-ins of Pawn, ElvUI and Blizzard's bags, not yet in the client. To check in WoW Forever: that `/pac` shows the main scale after the login, the yellow arrow's position and size next to the green one (ElvUI and Blizzard bags), the default main scale with Pawn Forever's scales, a scale hidden in Pawn, a gear change, the ElvUI bank, the settings page, `/reload` with the saved main scale, and no taint message when you use a bag item in combat (Blizzard bags).

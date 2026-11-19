@@ -19,7 +19,8 @@
 --     throttle    item link -> number of throttled arrow checks that return nil first
 --     nolink      item link -> number of PawnGetItemData calls that return an item without Link first
 --                 (Pawn has no stats for the item yet; its arrow check then returns nil as well)
---     initialized false: PawnIsInitialized stays false
+--     initialized false: Pawn's initialization never finishes (PawnIsReady keeps returning nil)
+--     readyAfter  number of PawnIsReady calls after Pawn's login that still return nil
 --     missing     { FunctionName = true }: these Pawn functions do not exist
 --     advisor     false: Pawn's bag arrows (ShowBagUpgradeAdvisor) are off
 --   elvui         false/nil, or { noFunction = true }: ElvUI and its bag module are loaded
@@ -226,8 +227,19 @@ local function installPawn(cfg)
     cfg.nolink = cfg.nolink or {}
     cfg.missing = cfg.missing or {}
     STUB.calls = { upgrade = 0, itemData = 0, scales = 0, arrow = 0 }
+    STUB.readyCalls = 0
+    STUB.pawnErrors = 0
 
-    PawnIsInitialized = false
+    -- Like Pawn's file-local flag (Pawn.lua: "local PawnIsInitialized"): private to the stand-in, other
+    -- addons reach it only through PawnIsReady(), which returns nil before and true after Pawn's login.
+    local initialized
+    STUB.pawnInitialize = function() initialized = true end
+    -- Pawn reports a call before its initialization in the chat (VgerCore.Fail) and returns nothing.
+    local function notInitialized(what)
+        STUB.pawnErrors = STUB.pawnErrors + 1
+        print("ERROR:  Can't " .. what .. " until Pawn is initialized")
+    end
+
     PawnCommon = { ShowBagUpgradeAdvisor = cfg.advisor ~= false }
 
     local function visible(name)
@@ -237,9 +249,19 @@ local function installPawn(cfg)
         return nil
     end
     local api = {}
+    function api.PawnIsReady()
+        STUB.readyCalls = STUB.readyCalls + 1
+        if not initialized then return nil end
+        if (cfg.readyAfter or 0) > 0 then
+            cfg.readyAfter = cfg.readyAfter - 1
+            return nil
+        end
+        return initialized
+    end
     function api.PawnIsScaleVisible(name) return visible(name) end
     function api.PawnGetAllScalesEx()
         STUB.calls.scales = STUB.calls.scales + 1
+        if not initialized then return notInitialized("get scale list") end
         local out = {}
         for _, s in ipairs(cfg.scales) do
             out[#out + 1] = { Name = s.name, LocalizedName = s.label, IsVisible = s.visible, IsProvider = false }
@@ -556,7 +578,7 @@ function Login(opts)
     opts = opts or {}
     FireEvent("ADDON_LOADED", "PawnArrowColors")
     if STUB.pawn and STUB.pawn.initialized ~= false then
-        PawnIsInitialized = true
+        STUB.pawnInitialize()
         if STUB.pawnHookBags and PawnCommon.ShowBagUpgradeAdvisor then STUB.pawnHookBags() end
     end
     FireEvent("PLAYER_LOGIN")

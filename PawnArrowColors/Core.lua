@@ -12,7 +12,7 @@
 local ADDON_NAME, ns = ...
 
 ns.name = ADDON_NAME
-ns.version = "1.0.0"
+ns.version = "1.0.1"
 
 -- The yellow arrow (64 x 64, drawn by tools/make_arrow.mjs). The arrow covers pixels 0..43 x 0..47 of
 -- the square, like ElvUI's arrow; on Blizzard slots only that part is shown, so that it fills the
@@ -77,26 +77,44 @@ end
 -- Pawn
 -- ---------------------------------------------------------------------------------------------
 
-ns.REQUIRED_PAWN = { "PawnGetItemData", "PawnIsItemAnUpgrade", "PawnGetAllScalesEx" }
+-- Every name the addon reads from Pawn is a global function or saved variable of Pawn (Pawn's own
+-- flag for its initialization is a local variable of Pawn.lua and cannot be read by other addons;
+-- PawnIsReady is Pawn's public way to ask for it). tests/pawn_names.test.mjs keeps that list.
+ns.REQUIRED_PAWN = { "PawnIsReady", "PawnGetItemData", "PawnIsItemAnUpgrade", "PawnGetAllScalesEx" }
 
--- Returns true, or false and the name of the first missing Pawn function.
+-- Returns true, or false and the name of the first missing Pawn function (nil when none of them exists,
+-- that is Pawn is not loaded).
 function ns.CheckPawn()
+    local missing, found = nil, false
     for _, name in ipairs(ns.REQUIRED_PAWN) do
-        if type(_G[name]) ~= "function" then return false, name end
+        if type(_G[name]) == "function" then
+            found = true
+        elseif not missing then
+            missing = name
+        end
     end
-    return true
+    if not missing then return true end
+    return false, found and missing or nil
 end
 
--- Pawn answers questions only after its own PLAYER_LOGIN handler.
-function ns.PawnReady()
-    return ns.loggedIn and ns.pawnOK and PawnIsInitialized and true or false
+-- Asks Pawn whether it is ready to rate items (true after Pawn's own PLAYER_LOGIN handler finished).
+-- Never raises an error; false when PawnIsReady is missing or fails.
+function ns.AskPawnReady()
+    if type(PawnIsReady) ~= "function" then return false end
+    local ok, ready = pcall(PawnIsReady)
+    return ok and ready and true or false
+end
+
+-- True once the addon is set up: logged in and Pawn reported ready (Pawn stays ready afterwards).
+function ns.IsPawnReady()
+    return ns.loggedIn and ns.pawnOK and true or false
 end
 
 -- The scales visible for this character, in the order of Pawn's scale list:
 -- { { name = internal name, label = display name }, ... }
 function ns.GetVisibleScales()
     local list = {}
-    if not ns.PawnReady() then return list end
+    if not ns.IsPawnReady() then return list end
     local ok, all = pcall(PawnGetAllScalesEx)
     if not ok or type(all) ~= "table" then return list end
     for _, s in ipairs(all) do
@@ -113,7 +131,7 @@ end
 -- visible scale. Cached until the next invalidation.
 function ns.ResolveMainScale()
     if ns.mainResolved then return ns.mainScale, ns.mainIsSaved end
-    if not ns.PawnReady() then return nil, false end
+    if not ns.IsPawnReady() then return nil, false end
     local list = ns.GetVisibleScales()
     local saved = ns.db and ns.db.mainScale
     local chosen, isSaved
@@ -142,7 +160,7 @@ end
 -- Returns "main" (upgrade for the main scale), "other" (Pawn shows an arrow, but not for the main
 -- scale) or nil (Pawn cannot tell yet, or the addon is not ready). Only "main" and "other" are cached.
 function ns.Classify(link)
-    if not ns.PawnReady() then return nil end
+    if not ns.IsPawnReady() then return nil end
     if issecretvalue and issecretvalue(link) then return nil end
     if type(link) ~= "string" or link == "" then return nil end
     local cached = ns.cache[link]
@@ -246,7 +264,7 @@ function ns.Paint(icon, kind, link)
         ns.MakeYellow(icon, kind)
     else
         ns.Restore(icon)
-        if class == nil and ns.PawnReady() and link ~= nil then ns.ScheduleRetry() end
+        if class == nil and ns.IsPawnReady() and link ~= nil then ns.ScheduleRetry() end
     end
 end
 
@@ -334,7 +352,8 @@ end
 -- Events
 -- ---------------------------------------------------------------------------------------------
 
-ns.SETUP_TRIES = 20
+ns.SETUP_TRIES = 20 -- tries to find Pawn ready, one every SETUP_DELAY seconds, before giving up
+ns.SETUP_DELAY = 0.5
 
 -- A gear change: Pawn checks the equipped items itself (throttled to 0.25 s, not in combat) and then
 -- calls PawnResetBags, which invalidates through the hook above. Asking Pawn before that would rate
@@ -350,23 +369,43 @@ function ns.OnEquipmentChanged()
     end)
 end
 
--- Hooks the bag paths once Pawn is ready.
+local function setupTimer()
+    ns.setupPending = false
+    ns.Setup()
+end
+
+-- Hooks the bag paths once Pawn is ready. Returns true when the addon is set up.
+-- Without one of Pawn's functions (another Pawn version, or no Pawn) the addon stays off and says so
+-- once. While Pawn is not ready yet it tries again every SETUP_DELAY seconds, SETUP_TRIES times;
+-- ns.pawnProblem holds the reason for /pac. ns.RetrySetup starts a new round after giving up.
 function ns.Setup()
-    if ns.setupDone then return end
+    if ns.setupDone then return true end
+    if not ns.loggedIn then return false end
     local ok, missing = ns.CheckPawn()
     if not ok then
-        ns.WarnOnce("pawn", string.format("Pawn's function %s was not found (another Pawn version?); the arrows keep Pawn's colors.", missing))
-        return
+        if missing then
+            ns.pawnProblem = string.format("Pawn's function %s was not found (another Pawn version?)", missing)
+        else
+            ns.pawnProblem = "Pawn is not loaded"
+        end
+        ns.WarnOnce("pawn", ns.pawnProblem .. "; the arrows keep Pawn's colors.")
+        return false
     end
-    if not PawnIsInitialized then
+    if not ns.AskPawnReady() then
         ns.setupTries = (ns.setupTries or 0) + 1
         if ns.setupTries <= ns.SETUP_TRIES then
-            C_Timer.After(0.5, ns.Setup)
+            ns.pawnProblem = "Pawn has not finished loading yet"
+            if not ns.setupPending then
+                ns.setupPending = true
+                C_Timer.After(ns.SETUP_DELAY, setupTimer)
+            end
         else
-            ns.WarnOnce("pawninit", "Pawn did not finish loading; the arrows keep Pawn's colors.")
+            ns.pawnProblem = "Pawn did not finish loading"
+            ns.WarnOnce("pawninit", "Pawn did not finish loading; the arrows keep Pawn's colors. /pac refresh tries again.")
         end
-        return
+        return false
     end
+    ns.pawnProblem = nil
     ns.pawnOK = true
     ns.setupDone = true
 
@@ -381,6 +420,16 @@ function ns.Setup()
     end
     if ns.RegisterSettings then ns.RegisterSettings() end
     ns.QueueRefresh()
+    return true
+end
+
+-- Tries the set-up again with a fresh count of tries (from /pac and /pac refresh), also after Setup
+-- gave up. Returns true when the addon is set up.
+function ns.RetrySetup()
+    if ns.setupDone then return true end
+    if not ns.loggedIn then return false end
+    ns.setupTries = 0
+    return ns.Setup()
 end
 
 local events = CreateFrame("Frame")
