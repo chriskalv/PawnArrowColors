@@ -199,6 +199,8 @@ function ns.Restore(icon)
     else
         local texture = ns.ElvUITexture() or orig.texture
         if texture then icon:SetTexture(texture) end
+        -- ElvUI sets these coordinates itself when it builds the slot (SetTexCoord(0, 1, 0, 1)); the
+        -- yellow arrow uses the same ones, so this line only guards against a later change of either.
         icon:SetTexCoord(unpack(ns.FULL_COORDS))
     end
     icon:SetVertexColor(1, 1, 1, 1)
@@ -207,15 +209,13 @@ function ns.Restore(icon)
 end
 
 -- Paints an arrow yellow in the chosen style. kind: "blizzard" or "elvui".
+-- A change of the style goes through ns.SetStyle, which restores every arrow first, so an arrow that is
+-- already painted always carries the current style.
 function ns.MakeYellow(icon, kind)
     local orig = ns.painted[icon]
-    if orig and orig.style ~= ns.db.style then
-        ns.Restore(icon)
-        orig = nil
-    end
     if not orig then
         -- the original state, taken before the first change
-        orig = { kind = kind, style = ns.db.style }
+        orig = { kind = kind }
         if kind == "blizzard" then
             orig.atlas = icon.GetAtlas and icon:GetAtlas() or nil
         else
@@ -224,7 +224,7 @@ function ns.MakeYellow(icon, kind)
         ns.painted[icon] = orig
     end
     -- applied every time: the bag addon may have set its own graphic again in the meantime
-    if orig.style == "tint" then
+    if ns.db.style == "tint" then
         icon:SetDesaturated(true)
         icon:SetVertexColor(ns.TINT[1], ns.TINT[2], ns.TINT[3], 1)
     else
@@ -292,8 +292,13 @@ function ns.ScheduleRetry()
 end
 
 -- Forgets every decision and the main scale (Pawn reset its bags, the gear or the main scale changed),
--- then repaints the visible arrows.
+-- then repaints the visible arrows on the next frame.
+--
+-- As a post-hook on PawnResetBags this runs after Pawn's own bag refresh; the arrows Pawn shows during
+-- that refresh are still painted from the old results and get their new color one frame later. That
+-- delay of one frame is intended: it keeps one repaint pass for any number of invalidations.
 function ns.Invalidate()
+    ns.equipPending = false
     ns.cache = {}
     ns.mainResolved, ns.mainScale, ns.mainIsSaved = nil, nil, nil
     ns.retries = 0
@@ -330,6 +335,20 @@ end
 -- ---------------------------------------------------------------------------------------------
 
 ns.SETUP_TRIES = 20
+
+-- A gear change: Pawn checks the equipped items itself (throttled to 0.25 s, not in combat) and then
+-- calls PawnResetBags, which invalidates through the hook above. Asking Pawn before that would rate
+-- the bags against the old gear, so the addon only invalidates itself when Pawn has not done so within
+-- this delay (in combat, or without PawnResetBags).
+ns.EQUIP_DELAY = 1
+
+function ns.OnEquipmentChanged()
+    if ns.equipPending then return end
+    ns.equipPending = true
+    C_Timer.After(ns.EQUIP_DELAY, function()
+        if ns.equipPending then ns.Invalidate() end
+    end)
+end
 
 -- Hooks the bag paths once Pawn is ready.
 function ns.Setup()
@@ -381,6 +400,6 @@ events:SetScript("OnEvent", function(_, event, arg1)
         events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
         ns.Setup()
     elseif event == "PLAYER_EQUIPMENT_CHANGED" then
-        if ns.setupDone then ns.Invalidate() end
+        if ns.setupDone then ns.OnEquipmentChanged() end
     end
 end)

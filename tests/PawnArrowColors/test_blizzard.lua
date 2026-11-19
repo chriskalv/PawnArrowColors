@@ -52,6 +52,28 @@ describe("Blizzard bags", function()
         assert_eq(ArrowState(icon), yellow(ns))
     end)
 
+    it("Pawn skips a button it already checked: the arrow keeps its color on the next UpdateItems", function()
+        local ns = start()
+        PutItem(0, 2, "item:other")
+        PutItem(0, 3, "item:main")
+        ContainerFrame1:Open({ 2, 3 })
+        ContainerFrame1:UpdateItems()
+        assert_eq(STUB.pawnSkips, 2, "Pawn did not call SetShown again")
+        assert_eq(ArrowState(arrow(ContainerFrame1, 2)), yellow(ns))
+        assert_eq(ArrowState(arrow(ContainerFrame1, 3)), ORIGINAL)
+    end)
+
+    it("an item Pawn has no stats for yet gets its color once Pawn's retry shows the arrow", function()
+        local ns = start({ pawn = { nolink = { ["item:other"] = 1 } } })
+        PutItem(0, 2, "item:other")
+        ContainerFrame1:Open({ 2 })
+        local icon = arrow(ContainerFrame1, 2)
+        assert_false(icon:IsShown(), "Pawn waits as well")
+        RunTimers(0)
+        assert_true(icon:IsShown())
+        assert_eq(ArrowState(icon), yellow(ns))
+    end)
+
     it("upgrade for both: green", function()
         start()
         PutItem(0, 3, "item:both")
@@ -219,7 +241,7 @@ describe("Blizzard bags", function()
         assert_contains(Output(), "Blizzard's bag frames were not found")
     end)
 
-    it("the addon writes no fields to Blizzard's buttons", function()
+    it("the addon writes no fields to Blizzard's buttons or arrows apart from its secure hooks", function()
         start()
         PutItem(0, 1, "item:other")
         ContainerFrame1:Open({ 1 })
@@ -228,5 +250,20 @@ describe("Blizzard bags", function()
         for k in pairs(button) do keys[#keys + 1] = tostring(k) end
         table.sort(keys)
         assert_eq(keys, { "GetBagID", "GetID", "GetParent", "UpgradeIcon", "bagID", "frame", "slotID" })
+        -- the arrow texture: the stand-in's methods and simulated texture state, plus nothing but the
+        -- three methods replaced by hooksecurefunc
+        local methods = STUB.textureMethods[button.UpgradeIcon]
+        local state = { parent = true, shown = true, vertex = true, desaturated = true, coords = true,
+            calls = true, atlas = true, texture = true }
+        local added = {}
+        for k, v in pairs(button.UpgradeIcon) do
+            if type(v) == "function" then
+                if v ~= methods[k] then added[#added + 1] = tostring(k) end
+            elseif not state[k] then
+                added[#added + 1] = tostring(k)
+            end
+        end
+        table.sort(added)
+        assert_eq(added, { "Hide", "SetShown", "Show" })
     end)
 end)

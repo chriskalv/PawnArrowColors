@@ -84,8 +84,26 @@ describe("slash command", function()
         assert_false(PawnArrowColorsCharDB.enabled)
         slash("on")
         assert_true(PawnArrowColorsCharDB.enabled)
-        slash("toggle")
+        assert_contains(slash("toggle"), "arrow colors off.")
         assert_false(PawnArrowColorsCharDB.enabled)
+        assert_contains(slash("toggle"), "arrow colors on.")
+        assert_true(PawnArrowColorsCharDB.enabled)
+    end)
+
+    it("two visible scales with the same display name are told apart by their internal name", function()
+        start({ pawn = { scales = {
+            { name = "Ret", label = "Retribution", visible = true },
+            { name = "\"PawnForever\":PALADIN3", label = "Retribution", visible = true },
+        } } })
+        local out = slash("list")
+        assert_contains(out, "  1. Retribution (Ret) *")
+        assert_contains(out, "  2. Retribution (\"PawnForever\":PALADIN3)")
+        assert_contains(slash("main retribution"), "several visible Pawn scales are called \"retribution\"; choose by number")
+        assert_nil(PawnArrowColorsCharDB.mainScale)
+        assert_contains(slash("main 2"), "main scale: Retribution (\"PawnForever\":PALADIN3).")
+        assert_eq(PawnArrowColorsCharDB.mainScale, "\"PawnForever\":PALADIN3")
+        local control = STUB.settings.controls[2]
+        assert_eq(control.options()[1].label, "Retribution (Ret)")
     end)
 
     it("/pac style tint and yellow", function()
@@ -155,6 +173,15 @@ describe("settings page", function()
         STUB.settings.settings.PAWNARROWCOLORS_STYLE:SetValue("tint")
         assert_eq(PawnArrowColorsCharDB.style, "tint")
         assert_eq(STUB.settings.controls[3].options(), { { value = "texture", label = "Yellow arrow" }, { value = "tint", label = "Tinted original arrow" } })
+    end)
+
+    it("with an incomplete Settings API no page is started and no error is shown", function()
+        ReloadAddon({})
+        Settings.CreateDropdown = nil
+        Login()
+        assert_nil(STUB.ns.settingsCategory)
+        assert_eq(#STUB.settings.categories, 0, "no half-built category")
+        assert_false(Output():find("could not be built", 1, true))
     end)
 
     it("without the Settings API only the slash command is offered", function()

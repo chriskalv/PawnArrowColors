@@ -8,6 +8,7 @@ local function styleName(style)
 end
 
 -- Finds a visible scale by list number, internal name or display name (case-insensitive).
+-- Returns the scale, or nil and "ambiguous" when several visible scales share that name.
 function ns.FindScale(query)
     local list = ns.GetVisibleScales()
     local n = tonumber(query)
@@ -16,10 +17,26 @@ function ns.FindScale(query)
         if s.name == query then return s end
     end
     local lower = string.lower(query)
+    local found
     for _, s in ipairs(list) do
-        if string.lower(s.label) == lower or string.lower(s.name) == lower then return s end
+        if string.lower(s.label) == lower or string.lower(s.name) == lower then
+            if found then return nil, "ambiguous" end
+            found = s
+        end
     end
-    return nil
+    return found
+end
+
+-- The display name of a scale; with the internal name added when another visible scale has the same
+-- display name (Pawn's own scale and a scale of a provider can share one).
+function ns.ScaleText(scale, list)
+    list = list or ns.GetVisibleScales()
+    for _, s in ipairs(list) do
+        if s.name ~= scale.name and s.label == scale.label then
+            return string.format("%s (%s)", scale.label, scale.name)
+        end
+    end
+    return scale.label
 end
 
 local function printStatus()
@@ -34,7 +51,7 @@ local function printStatus()
     end
     local main, isSaved = ns.ResolveMainScale()
     if main then
-        ns.Print(string.format("main scale: %s%s.", main.label, isSaved and "" or " (default: first visible scale)"))
+        ns.Print(string.format("main scale: %s%s.", ns.ScaleText(main), isSaved and "" or " (default: first visible scale)"))
     else
         ns.Print("main scale: none, Pawn shows no scale for this character.")
     end
@@ -59,7 +76,7 @@ local function printList()
     ns.Print("visible Pawn scales (green = upgrade for the main scale, marked with *):")
     for i, s in ipairs(list) do
         local mark = (main and main.name == s.name) and " *" or ""
-        print(string.format("  %d. %s%s", i, s.label, mark))
+        print(string.format("  %d. %s%s", i, ns.ScaleText(s, list), mark))
     end
 end
 
@@ -96,12 +113,14 @@ function ns.SlashCommand(input)
         elseif string.lower(rest) == "default" or string.lower(rest) == "reset" then
             ns.SetMainScale(nil)
             local main = ns.ResolveMainScale()
-            ns.Print("main scale: default (" .. (main and main.label or "no visible scale") .. ").")
+            ns.Print("main scale: default (" .. (main and ns.ScaleText(main) or "no visible scale") .. ").")
         else
-            local scale = ns.FindScale(rest)
+            local scale, problem = ns.FindScale(rest)
             if scale then
                 ns.SetMainScale(scale.name)
-                ns.Print("main scale: " .. scale.label .. ".")
+                ns.Print("main scale: " .. ns.ScaleText(scale) .. ".")
+            elseif problem == "ambiguous" then
+                ns.Print("several visible Pawn scales are called \"" .. rest .. "\"; choose by number, /pac list shows them.")
             else
                 ns.Print("no visible Pawn scale \"" .. rest .. "\"; /pac list shows them.")
             end
@@ -170,7 +189,7 @@ local function buildSettings()
     Settings.CreateDropdown(category, main, function()
         local container = Settings.CreateControlTextContainer()
         local list = ns.GetVisibleScales()
-        for _, s in ipairs(list) do container:Add(s.name, s.label) end
+        for _, s in ipairs(list) do container:Add(s.name, ns.ScaleText(s, list)) end
         if #list == 0 then container:Add("", "(no visible Pawn scale)") end
         return container:GetData()
     end, "The green arrow stays on items that are an upgrade for this scale. The list shows the scales Pawn shows for this character.")

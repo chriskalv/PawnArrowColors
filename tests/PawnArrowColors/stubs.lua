@@ -17,6 +17,8 @@
 --     ilvl        item link -> true: an item level upgrade (only used when upgrades has no entry)
 --     unknown     item link -> number of PawnIsItemAnUpgrade calls that return nothing first
 --     throttle    item link -> number of throttled arrow checks that return nil first
+--     nolink      item link -> number of PawnGetItemData calls that return an item without Link first
+--                 (Pawn has no stats for the item yet; its arrow check then returns nil as well)
 --     initialized false: PawnIsInitialized stays false
 --     missing     { FunctionName = true }: these Pawn functions do not exist
 --     advisor     false: Pawn's bag arrows (ShowBagUpgradeAdvisor) are off
@@ -166,6 +168,13 @@ function NewTexture(parent, kind)
         self.calls = self.calls + 1
         self.desaturated = not not v
     end
+    -- the methods as created, to tell later replacements (hooks) apart
+    STUB.textureMethods = STUB.textureMethods or setmetatable({}, { __mode = "k" })
+    local methods = {}
+    for k, v in pairs(t) do
+        if type(v) == "function" then methods[k] = v end
+    end
+    STUB.textureMethods[t] = methods
     return t
 end
 
@@ -214,6 +223,7 @@ local function installPawn(cfg)
     cfg.ilvl = cfg.ilvl or {}
     cfg.unknown = cfg.unknown or {}
     cfg.throttle = cfg.throttle or {}
+    cfg.nolink = cfg.nolink or {}
     cfg.missing = cfg.missing or {}
     STUB.calls = { upgrade = 0, itemData = 0, scales = 0, arrow = 0 }
 
@@ -238,6 +248,10 @@ local function installPawn(cfg)
     end
     function api.PawnGetItemData(link)
         STUB.calls.itemData = STUB.calls.itemData + 1
+        if (cfg.nolink[link] or 0) > 0 then
+            cfg.nolink[link] = cfg.nolink[link] - 1
+            return { Link = nil }
+        end
         return { Link = link }
     end
     -- Upgrade list for the visible scales the item is an upgrade for, sorted by display name.
@@ -265,6 +279,10 @@ local function installPawn(cfg)
             cfg.throttle[link] = cfg.throttle[link] - 1
             return nil
         end
+        if (cfg.nolink[link] or 0) > 0 then
+            cfg.nolink[link] = cfg.nolink[link] - 1
+            return nil
+        end
         local hasScale = false
         for _, name in ipairs(cfg.upgrades[link] or {}) do
             if visible(name) then hasScale = true end
@@ -275,9 +293,10 @@ local function installPawn(cfg)
         STUB.calls.arrow = STUB.calls.arrow + 1
         return api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link)
     end
-    -- Pawn's bag reset: refreshes its own bag arrows.
+    -- Pawn's bag reset: refreshes its own bag arrows (a new refresh number ends the per-button skip).
     function api.PawnResetBags()
         STUB.resets = (STUB.resets or 0) + 1
+        STUB.pawnRefreshCounter = (STUB.pawnRefreshCounter or 0) + 1
         if STUB.pawnBagRefresh then STUB.pawnBagRefresh() end
     end
     for name, fn in pairs(api) do
@@ -287,9 +306,13 @@ end
 
 -- Stand-in for Pawn's bag integration with Blizzard's bags: post-hooks on UpdateItems of the
 -- container frames; per button it asks the throttled arrow check, shows or hides UpgradeIcon with
--- SetShown, and retries on the next frame (C_Timer.After(0)) while the check returns nil.
+-- SetShown, and retries on the next frame (C_Timer.After(0)) while the check returns nil. Like Pawn it
+-- skips a button whose link it already checked since the last PawnResetBags (no SetShown then); the
+-- stand-in keeps that state in its own table instead of on the button.
 local function installPawnBags()
     local pending = {}
+    local checked = setmetatable({}, { __mode = "k" }) -- button -> { refresh, link }
+    STUB.pawnSkips = 0
     local function updateButton(button)
         if not PawnCommon.ShowBagUpgradeAdvisor then
             button.UpgradeIcon:SetShown(false)
@@ -297,11 +320,18 @@ local function installPawnBags()
         end
         local info = C_Container.GetContainerItemInfo(button:GetBagID(), button:GetID())
         if not info then
+            checked[button] = nil
             button.UpgradeIcon:SetShown(false)
+            return
+        end
+        local last = checked[button]
+        if last and last.refresh == (STUB.pawnRefreshCounter or 0) and last.link == info.hyperlink then
+            STUB.pawnSkips = STUB.pawnSkips + 1
             return
         end
         local isUpgrade = PawnShouldItemLinkHaveUpgradeArrow(info.hyperlink, true)
         if isUpgrade == nil then
+            checked[button] = nil
             if #pending == 0 then
                 C_Timer.After(0, function()
                     local retry = pending
@@ -311,6 +341,7 @@ local function installPawnBags()
             end
             pending[#pending + 1] = button
         else
+            checked[button] = { refresh = STUB.pawnRefreshCounter or 0, link = info.hyperlink }
             button.UpgradeIcon:SetShown(isUpgrade)
         end
     end

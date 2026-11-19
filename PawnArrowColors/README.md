@@ -9,7 +9,7 @@ It colors only the arrows Pawn or ElvUI already show. It never adds or hides an 
 
 ## Requirements
 
-- **Pawn** (tested against the code of Pawn 2.14.4; works with the scales of Pawn Forever as well).
+- **Pawn** (written and tested against the code of Pawn 2.14.4; written for the scales of Pawn Forever as well, which is not checked in the game yet).
 - **ElvUI bags** (optional): ElvUI's own setting *Bags > Upgrade Icon* must be on; ElvUI then shows the arrow in its bags and bank.
 - **Blizzard bags**: Pawn's own option *Show bag upgrade advisor* must be on (Pawn > Options); Pawn then shows the arrow in Blizzard's bags. Blizzard's bank has no upgrade arrows.
 
@@ -22,8 +22,8 @@ The main scale is saved per character by Pawn's internal scale name. Default: th
 | Command | Effect |
 |---|---|
 | `/pac` | state: on or off, style, main scale, which bags are colored |
-| `/pac list` | the visible Pawn scales with numbers; `*` marks the main scale |
-| `/pac main <number or name>` | choose the main scale, e.g. `/pac main 2` or `/pac main Retribution` |
+| `/pac list` | the visible Pawn scales with numbers; `*` marks the main scale; scales with the same name show their internal name in brackets |
+| `/pac main <number or name>` | choose the main scale, e.g. `/pac main 2` or `/pac main Retribution`; if several scales have that name, choose by number |
 | `/pac main default` | back to the default (first visible scale) |
 | `/pac on`, `/pac off`, `/pac toggle` | color the arrows, or leave every arrow green |
 | `/pac style yellow`, `/pac style tint` | the own yellow arrow (default), or the original arrow desaturated and tinted yellow |
@@ -36,10 +36,11 @@ The main scale is saved per character by Pawn's internal scale name. Default: th
 
 - **ElvUI**: a secure post-hook on the function of ElvUI's bag module that shows or hides the arrow of a slot (`UpdateItemUpgradeIcon`); it also runs when ElvUI asks Pawn again later.
 - **Blizzard bags**: secure hooks on the arrow texture of each bag button (`SetShown`, `Show`, `Hide`), found through post-hooks on the bag frames' `UpdateItems`. They follow every change Pawn makes to the arrow, including Pawn's delayed retries.
-- For each item link the addon asks Pawn once which visible scales the item is an upgrade for and remembers the answer. The answers are forgotten when Pawn resets its bag arrows (scale or option changes in Pawn), when your gear changes and when you choose another main scale; the visible arrows are then repainted.
+- For each item link the addon asks Pawn once which visible scales the item is an upgrade for and remembers the answer. The answers are forgotten when Pawn resets its bag arrows (scale or option changes in Pawn, and Pawn's own check after a gear change), when you choose another main scale, and one second after a gear change if Pawn has not reset its arrows by then (in combat Pawn waits); the visible arrows are then repainted on the next frame.
 - A yellow arrow is put back to its original state (graphic, texture coordinates, color, saturation) as soon as the button shows a main-scale upgrade, no arrow or the colors are turned off.
 - If Pawn or ElvUI lack a function the addon expects (another version), the affected part turns itself off and says so once in the chat.
+- The addon writes no fields to Blizzard's or ElvUI's frames; the only change to Blizzard's arrow textures is the secure hooks (`hooksecurefunc`) on `SetShown`, `Show` and `Hide`, the same kind of hook Pawn itself uses.
 
 ## Not checked in the game yet
 
-This first version is tested against stand-ins of Pawn, ElvUI and Blizzard's bags, not yet in the client. To check in WoW Forever: the yellow arrow's position and size next to the green one (ElvUI and Blizzard bags), the default main scale with Pawn Forever's scales, a scale hidden in Pawn, a gear change, the ElvUI bank, the settings page and `/reload` with the saved main scale.
+This first version is tested against stand-ins of Pawn, ElvUI and Blizzard's bags, not yet in the client. To check in WoW Forever: the yellow arrow's position and size next to the green one (ElvUI and Blizzard bags), the default main scale with Pawn Forever's scales, a scale hidden in Pawn, a gear change, the ElvUI bank, the settings page, `/reload` with the saved main scale, and no taint message when you use a bag item in combat (Blizzard bags).
