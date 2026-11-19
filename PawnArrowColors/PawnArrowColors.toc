@@ -1,0 +1,15 @@
+## Interface: 16001
+## Interface-Forever: 16001
+## Title: Pawn Arrow Colors
+## Notes: Colors Pawn's upgrade arrows in your bags: green when the item is an upgrade for your main Pawn scale, yellow when it is an upgrade only for another visible scale.
+## Author: Zippy
+## Version: 1.0.0
+## Dependencies: Pawn
+## OptionalDeps: ElvUI
+## SavedVariablesPerCharacter: PawnArrowColorsCharDB
+## IconTexture: Interface\AddOns\PawnArrowColors\Textures\ArrowYellow
+## X-Website: https://github.com/chriskalv/PawnArrowColors
+
+Core.lua
+Bags.lua
+Options.lua

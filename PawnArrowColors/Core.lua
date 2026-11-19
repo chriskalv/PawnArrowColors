@@ -1,0 +1,386 @@
+-- Pawn Arrow Colors: core.
+--
+-- Saved settings, access to Pawn, the decision "main scale or another scale" per item link with its
+-- cache, and painting one arrow texture yellow or back to its original state. The bag hooks live in
+-- Bags.lua, the slash command and the settings page in Options.lua.
+--
+-- Rule: an arrow that Pawn (Blizzard bags) or ElvUI (ElvUI bags) shows stays as it is (green) when the
+-- item is an upgrade for the main scale; it turns yellow when the item is not an upgrade for the main
+-- scale, that is an upgrade only for other visible scales (or an item level upgrade only). The addon
+-- never shows or hides an arrow itself.
+
+local ADDON_NAME, ns = ...
+
+ns.name = ADDON_NAME
+ns.version = "1.0.0"
+
+-- The yellow arrow (64 x 64, drawn by tools/make_arrow.mjs). The arrow covers pixels 0..43 x 0..47 of
+-- the square, like ElvUI's arrow; on Blizzard slots only that part is shown, so that it fills the
+-- rectangle of Blizzard's arrow atlas.
+ns.TEXTURE = "Interface\\AddOns\\PawnArrowColors\\Textures\\ArrowYellow"
+ns.ARROW_COORDS = { 0, 44 / 64, 0, 48 / 64 }
+ns.FULL_COORDS = { 0, 1, 0, 1 }
+-- Tint for the style "tint": the original arrow desaturated and colored with this.
+ns.TINT = { 1, 0.82, 0.1 }
+ns.BLIZZARD_ATLAS = "bags-greenarrow"
+
+ns.STYLES = { "texture", "tint" }
+ns.STYLE_LABELS = { texture = "Yellow arrow", tint = "Tinted original arrow" }
+
+ns.MAX_RETRIES = 10 -- refresh passes for links that Pawn cannot rate yet, per invalidation
+ns.RETRY_DELAY = 1
+
+ns.loggedIn = false
+ns.pawnOK = false
+ns.cache = {} -- item link -> "main" | "other"
+ns.painted = setmetatable({}, { __mode = "k" }) -- arrow texture -> { kind, texture }
+ns.paths = {} -- name -> path table (Bags.lua)
+ns.warned = {}
+ns.stats = { classified = 0, pawnCalls = 0 }
+
+local PREFIX = "|cff33ff99Pawn Arrow Colors|r: "
+
+function ns.Print(msg)
+    print(PREFIX .. msg)
+end
+
+-- Prints a message only once per session and key.
+function ns.WarnOnce(key, msg)
+    if ns.warned[key] then return end
+    ns.warned[key] = true
+    ns.Print(msg)
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Saved settings (per character)
+-- ---------------------------------------------------------------------------------------------
+
+local function isStyle(v)
+    for _, s in ipairs(ns.STYLES) do
+        if s == v then return true end
+    end
+    return false
+end
+ns.IsStyle = isStyle
+
+function ns.InitDB()
+    if type(PawnArrowColorsCharDB) ~= "table" then PawnArrowColorsCharDB = {} end
+    local db = PawnArrowColorsCharDB
+    if type(db.enabled) ~= "boolean" then db.enabled = true end
+    if not isStyle(db.style) then db.style = "texture" end
+    if db.mainScale ~= nil and (type(db.mainScale) ~= "string" or db.mainScale == "") then db.mainScale = nil end
+    ns.db = db
+    return db
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Pawn
+-- ---------------------------------------------------------------------------------------------
+
+ns.REQUIRED_PAWN = { "PawnGetItemData", "PawnIsItemAnUpgrade", "PawnGetAllScalesEx" }
+
+-- Returns true, or false and the name of the first missing Pawn function.
+function ns.CheckPawn()
+    for _, name in ipairs(ns.REQUIRED_PAWN) do
+        if type(_G[name]) ~= "function" then return false, name end
+    end
+    return true
+end
+
+-- Pawn answers questions only after its own PLAYER_LOGIN handler.
+function ns.PawnReady()
+    return ns.loggedIn and ns.pawnOK and PawnIsInitialized and true or false
+end
+
+-- The scales visible for this character, in the order of Pawn's scale list:
+-- { { name = internal name, label = display name }, ... }
+function ns.GetVisibleScales()
+    local list = {}
+    if not ns.PawnReady() then return list end
+    local ok, all = pcall(PawnGetAllScalesEx)
+    if not ok or type(all) ~= "table" then return list end
+    for _, s in ipairs(all) do
+        if type(s) == "table" and s.IsVisible and type(s.Name) == "string" then
+            local label = type(s.LocalizedName) == "string" and s.LocalizedName ~= "" and s.LocalizedName or s.Name
+            list[#list + 1] = { name = s.Name, label = label }
+        end
+    end
+    return list
+end
+
+-- The main scale: the saved one if Pawn still shows it for this character, otherwise the first visible
+-- scale. Returns the entry { name, label } and true when it is the saved choice, or nil without any
+-- visible scale. Cached until the next invalidation.
+function ns.ResolveMainScale()
+    if ns.mainResolved then return ns.mainScale, ns.mainIsSaved end
+    if not ns.PawnReady() then return nil, false end
+    local list = ns.GetVisibleScales()
+    local saved = ns.db and ns.db.mainScale
+    local chosen, isSaved
+    if saved then
+        for _, s in ipairs(list) do
+            if s.name == saved then
+                chosen, isSaved = s, true
+                break
+            end
+        end
+        if not chosen and ns.missingNotice ~= saved then
+            ns.missingNotice = saved
+            ns.Print(string.format("the saved main scale %s is not a visible Pawn scale for this character; using %s.",
+                saved, list[1] and list[1].label or "none (no visible scale)"))
+        end
+    end
+    if not chosen then chosen, isSaved = list[1], false end
+    ns.mainScale, ns.mainIsSaved, ns.mainResolved = chosen, isSaved, true
+    return chosen, isSaved
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Decision per item link
+-- ---------------------------------------------------------------------------------------------
+
+-- Returns "main" (upgrade for the main scale), "other" (Pawn shows an arrow, but not for the main
+-- scale) or nil (Pawn cannot tell yet, or the addon is not ready). Only "main" and "other" are cached.
+function ns.Classify(link)
+    if not ns.PawnReady() then return nil end
+    if issecretvalue and issecretvalue(link) then return nil end
+    if type(link) ~= "string" or link == "" then return nil end
+    local cached = ns.cache[link]
+    if cached then return cached end
+
+    ns.stats.pawnCalls = ns.stats.pawnCalls + 1
+    local okItem, item = pcall(PawnGetItemData, link)
+    if not okItem or type(item) ~= "table" or item.Link == nil then return nil end
+    local ok, upgrades, itemLevelIncrease = pcall(PawnIsItemAnUpgrade, item)
+    if not ok then return nil end
+
+    local result
+    if type(upgrades) == "table" then
+        result = "other"
+        local main = ns.ResolveMainScale()
+        if main then
+            for _, u in ipairs(upgrades) do
+                if type(u) == "table" and u.ScaleName == main.name then
+                    result = "main"
+                    break
+                end
+            end
+        end
+    elseif itemLevelIncrease ~= nil then
+        result = "other" -- an item level upgrade only
+    else
+        return nil -- Pawn returns nothing while it lacks data for the equipped items
+    end
+    ns.cache[link] = result
+    ns.stats.classified = ns.stats.classified + 1
+    return result
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Painting
+-- ---------------------------------------------------------------------------------------------
+
+-- ElvUI's own arrow texture (read only), used to restore an ElvUI arrow.
+function ns.ElvUITexture()
+    local E = type(ElvUI) == "table" and ElvUI[1]
+    local media = type(E) == "table" and type(E.Media) == "table" and E.Media.Textures
+    local tex = type(media) == "table" and media.BagUpgradeIcon
+    if type(tex) == "string" or type(tex) == "number" then return tex end
+    return nil
+end
+
+-- Puts an arrow back into its original state: graphic, texture coordinates, color, saturation.
+-- Does nothing to an arrow this addon has not changed.
+function ns.Restore(icon)
+    local orig = ns.painted[icon]
+    if not orig then return end
+    if orig.kind == "blizzard" then
+        icon:SetAtlas(orig.atlas or ns.BLIZZARD_ATLAS) -- also sets the atlas texture coordinates; size stays
+    else
+        local texture = ns.ElvUITexture() or orig.texture
+        if texture then icon:SetTexture(texture) end
+        icon:SetTexCoord(unpack(ns.FULL_COORDS))
+    end
+    icon:SetVertexColor(1, 1, 1, 1)
+    icon:SetDesaturated(false)
+    ns.painted[icon] = nil
+end
+
+-- Paints an arrow yellow in the chosen style. kind: "blizzard" or "elvui".
+function ns.MakeYellow(icon, kind)
+    local orig = ns.painted[icon]
+    if orig and orig.style ~= ns.db.style then
+        ns.Restore(icon)
+        orig = nil
+    end
+    if not orig then
+        -- the original state, taken before the first change
+        orig = { kind = kind, style = ns.db.style }
+        if kind == "blizzard" then
+            orig.atlas = icon.GetAtlas and icon:GetAtlas() or nil
+        else
+            orig.texture = icon:GetTexture()
+        end
+        ns.painted[icon] = orig
+    end
+    -- applied every time: the bag addon may have set its own graphic again in the meantime
+    if orig.style == "tint" then
+        icon:SetDesaturated(true)
+        icon:SetVertexColor(ns.TINT[1], ns.TINT[2], ns.TINT[3], 1)
+    else
+        icon:SetTexture(ns.TEXTURE)
+        icon:SetTexCoord(unpack(kind == "blizzard" and ns.ARROW_COORDS or ns.FULL_COORDS))
+        icon:SetVertexColor(1, 1, 1, 1)
+        icon:SetDesaturated(false)
+    end
+end
+
+-- Colors one visible arrow for the item link.
+function ns.Paint(icon, kind, link)
+    if not ns.db or not ns.db.enabled then
+        ns.Restore(icon)
+        return
+    end
+    local class = ns.Classify(link)
+    if class == "other" then
+        ns.MakeYellow(icon, kind)
+    else
+        ns.Restore(icon)
+        if class == nil and ns.PawnReady() and link ~= nil then ns.ScheduleRetry() end
+    end
+end
+
+-- Every arrow back to its original state (when the coloring is turned off).
+function ns.RestoreAll()
+    local icons = {}
+    for icon in pairs(ns.painted) do icons[#icons + 1] = icon end
+    for _, icon in ipairs(icons) do ns.Restore(icon) end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Cache and refresh
+-- ---------------------------------------------------------------------------------------------
+
+-- Repaints the visible arrows of every active bag path.
+function ns.RefreshVisible()
+    ns.refreshPending = false
+    if not ns.loggedIn then return end
+    if ns.db and not ns.db.enabled then
+        ns.RestoreAll()
+        return
+    end
+    for _, path in pairs(ns.paths) do
+        if path.active and path.Refresh then path.Refresh() end
+    end
+end
+
+-- Repaints on the next frame (several invalidations in one frame lead to one pass).
+function ns.QueueRefresh()
+    if ns.refreshPending or not ns.loggedIn then return end
+    ns.refreshPending = true
+    C_Timer.After(0, ns.RefreshVisible)
+end
+
+function ns.ScheduleRetry()
+    if ns.retryPending or (ns.retries or 0) >= ns.MAX_RETRIES then return end
+    ns.retryPending = true
+    ns.retries = (ns.retries or 0) + 1
+    C_Timer.After(ns.RETRY_DELAY, function()
+        ns.retryPending = false
+        ns.RefreshVisible()
+    end)
+end
+
+-- Forgets every decision and the main scale (Pawn reset its bags, the gear or the main scale changed),
+-- then repaints the visible arrows.
+function ns.Invalidate()
+    ns.cache = {}
+    ns.mainResolved, ns.mainScale, ns.mainIsSaved = nil, nil, nil
+    ns.retries = 0
+    ns.QueueRefresh()
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Changing the settings
+-- ---------------------------------------------------------------------------------------------
+
+function ns.SetEnabled(on)
+    ns.db.enabled = not not on
+    if not ns.db.enabled then ns.RestoreAll() end
+    ns.Invalidate()
+end
+
+-- name: internal scale name, or nil for the default (first visible scale).
+function ns.SetMainScale(name)
+    ns.db.mainScale = name
+    ns.missingNotice = nil
+    ns.Invalidate()
+end
+
+function ns.SetStyle(style)
+    if not isStyle(style) then return false end
+    ns.db.style = style
+    ns.RestoreAll()
+    ns.Invalidate()
+    return true
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Events
+-- ---------------------------------------------------------------------------------------------
+
+ns.SETUP_TRIES = 20
+
+-- Hooks the bag paths once Pawn is ready.
+function ns.Setup()
+    if ns.setupDone then return end
+    local ok, missing = ns.CheckPawn()
+    if not ok then
+        ns.WarnOnce("pawn", string.format("Pawn's function %s was not found (another Pawn version?); the arrows keep Pawn's colors.", missing))
+        return
+    end
+    if not PawnIsInitialized then
+        ns.setupTries = (ns.setupTries or 0) + 1
+        if ns.setupTries <= ns.SETUP_TRIES then
+            C_Timer.After(0.5, ns.Setup)
+        else
+            ns.WarnOnce("pawninit", "Pawn did not finish loading; the arrows keep Pawn's colors.")
+        end
+        return
+    end
+    ns.pawnOK = true
+    ns.setupDone = true
+
+    if type(PawnResetBags) == "function" then
+        hooksecurefunc("PawnResetBags", ns.Invalidate)
+    else
+        ns.WarnOnce("reset", "Pawn's function PawnResetBags was not found; after changing Pawn's scales type /pac refresh.")
+    end
+    for _, name in ipairs(ns.PATH_ORDER or {}) do
+        local path = ns.paths[name]
+        path.active = path.Setup() and true or false
+    end
+    if ns.RegisterSettings then ns.RegisterSettings() end
+    ns.QueueRefresh()
+end
+
+local events = CreateFrame("Frame")
+ns.eventFrame = events
+events:RegisterEvent("ADDON_LOADED")
+events:RegisterEvent("PLAYER_LOGIN")
+events:SetScript("OnEvent", function(_, event, arg1)
+    if event == "ADDON_LOADED" then
+        if arg1 == ADDON_NAME then
+            ns.InitDB()
+            events:UnregisterEvent("ADDON_LOADED")
+        end
+    elseif event == "PLAYER_LOGIN" then
+        if not ns.db then ns.InitDB() end
+        ns.loggedIn = true
+        events:UnregisterEvent("PLAYER_LOGIN")
+        events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+        ns.Setup()
+    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
+        if ns.setupDone then ns.Invalidate() end
+    end
+end)
