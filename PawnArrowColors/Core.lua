@@ -424,11 +424,14 @@ function ns.Setup()
 end
 
 -- Tries the set-up again with a fresh count of tries (from /pac and /pac refresh), also after Setup
--- gave up. Returns true when the addon is set up.
+-- gave up. While a round of tries is still running it leaves that round as it is. A new round that
+-- gives up again says so again. Returns true when the addon is set up.
 function ns.RetrySetup()
     if ns.setupDone then return true end
     if not ns.loggedIn then return false end
+    if ns.setupPending then return ns.Setup() end
     ns.setupTries = 0
+    ns.warned.pawninit = nil
     return ns.Setup()
 end
 

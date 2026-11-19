@@ -136,6 +136,35 @@ describe("Pawn readiness", function()
         assert_true(ns.setupDone)
     end)
 
+    it("a second round of tries that gives up again says so again", function()
+        local ns = ReloadAddon({ pawn = { initialized = false } })
+        Login()
+        RunAllTimers(40)
+        assert_contains(Output(), "Pawn did not finish loading")
+        SlashCmdList.PAWNARROWCOLORS("refresh")
+        ClearOutput()
+        RunAllTimers(40)
+        assert_false(ns.setupDone)
+        assert_contains(Output(), "Pawn did not finish loading; the arrows keep Pawn's colors. /pac refresh tries again.")
+    end)
+
+    it("/pac while a round of tries is running does not make that round longer", function()
+        local ns = ReloadAddon({ pawn = { initialized = false } })
+        Login({ noTimers = true })
+        local rounds = 0
+        for _ = 1, 5 do rounds = rounds + RunTimers() end
+        SlashCmdList.PAWNARROWCOLORS("")
+        SlashCmdList.PAWNARROWCOLORS("refresh")
+        assert_eq(#STUB.timers, 1, "still one retry at a time")
+        for _ = 1, 40 do
+            if #STUB.timers == 0 then break end
+            rounds = rounds + RunTimers()
+        end
+        assert_false(ns.setupDone)
+        assert_true(rounds <= ns.SETUP_TRIES, "at most SETUP_TRIES retries after the login, got " .. rounds)
+        assert_contains(Output(), "Pawn did not finish loading")
+    end)
+
     it("a global PawnIsInitialized has no influence (Pawn keeps that flag local)", function()
         -- true as a global while Pawn is not ready: the addon still waits
         local ns = ReloadAddon({ pawn = { initialized = false } })

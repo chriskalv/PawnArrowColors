@@ -296,7 +296,9 @@ local function installPawn(cfg)
         if list then table.sort(list, function(a, b) return a.LocalizedScaleName < b.LocalizedScaleName end) end
         return list, cfg.ilvl[link] and 3 or nil
     end
+    -- Like Pawn, the arrow check answers only once Pawn is initialized (before that: chat error, nil).
     function api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link)
+        if not initialized then return notInitialized("check to see if items are upgrades") end
         if (cfg.throttle[link] or 0) > 0 then
             cfg.throttle[link] = cfg.throttle[link] - 1
             return nil
@@ -437,7 +439,9 @@ end
 
 local function installElvUI(cfg)
     STUB.elvuiTexture = "Interface\\AddOns\\ElvUI\\Media\\Textures\\BagUpgradeIcon.tga"
-    local B = { BagFrames = {} }
+    -- Like ElvUI, B.BagFrames exists only after the bag module's Initialize (ElvUI's OnEnable at
+    -- PLAYER_LOGIN, and only with ElvUI bags turned on); STUB.elvInitialize() does that step.
+    local B = {}
     local E = { Media = { Textures = { BagUpgradeIcon = STUB.elvuiTexture } } }
     function E:GetModule(name, silent)
         if name == "Bags" then return B end
@@ -475,8 +479,12 @@ local function installElvUI(cfg)
         B.BagFrames[#B.BagFrames + 1] = f
         return f
     end
-    STUB.elvBags = newFrame({ 0, 1 })
-    STUB.elvBank = newFrame({ -1, 5 })
+    STUB.elvInitialize = function()
+        if B.BagFrames then return end
+        B.BagFrames = {}
+        STUB.elvBags = newFrame({ 0, 1 })
+        STUB.elvBank = newFrame({ -1, 5 })
+    end
     STUB.B = B
 end
 
@@ -572,8 +580,9 @@ function ReloadAddon(config)
     return ns
 end
 
--- Login sequence: the addon's saved variables, Pawn's PLAYER_LOGIN (initialized, bag hooks), then the
--- addon's PLAYER_LOGIN, then the timers of the next frame.
+-- Login sequence: the addon's saved variables, Pawn's PLAYER_LOGIN (initialized, bag hooks), ElvUI's
+-- bag module Initialize (unless opts.elvLate), then the addon's PLAYER_LOGIN, then the timers of the
+-- next frame.
 function Login(opts)
     opts = opts or {}
     FireEvent("ADDON_LOADED", "PawnArrowColors")
@@ -581,6 +590,7 @@ function Login(opts)
         STUB.pawnInitialize()
         if STUB.pawnHookBags and PawnCommon.ShowBagUpgradeAdvisor then STUB.pawnHookBags() end
     end
+    if STUB.elvInitialize and not opts.elvLate then STUB.elvInitialize() end
     FireEvent("PLAYER_LOGIN")
     if not opts.noTimers then RunAllTimers() end
 end
