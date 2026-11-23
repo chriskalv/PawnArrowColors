@@ -15,4 +15,5 @@ Bags.lua
 Age.lua
 HitCap.lua
 Upgrade.lua
+Pairs.lua
 Options.lua

@@ -9,7 +9,8 @@ describe("load", function()
         assert_eq(ADDON_TOC["OptionalDeps"], "ElvUI")
         assert_eq(ADDON_TOC["SavedVariablesPerCharacter"], "PawnArrowColorsCharDB")
         assert_eq(ADDON_FILES, { "PawnArrowColors/Core.lua", "PawnArrowColors/Bags.lua", "PawnArrowColors/Age.lua",
-            "PawnArrowColors/HitCap.lua", "PawnArrowColors/Upgrade.lua", "PawnArrowColors/Options.lua" })
+            "PawnArrowColors/HitCap.lua", "PawnArrowColors/Upgrade.lua", "PawnArrowColors/Pairs.lua",
+            "PawnArrowColors/Options.lua" })
     end)
 
     it("the version in the code matches the TOC", function()

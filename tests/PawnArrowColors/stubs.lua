@@ -212,6 +212,10 @@ local function containerAPI()
             if not link then return nil end
             return { hyperlink = link, stackCount = 1 }
         end,
+        GetContainerNumSlots = function(bagID)
+            if bagID >= 0 and bagID <= 4 then return 16 end
+            return 0
+        end,
     }
 end
 

@@ -145,7 +145,8 @@ describe("settings page", function()
         local kinds = {}
         for _, c in ipairs(STUB.settings.controls) do kinds[#kinds + 1] = c.kind .. ":" .. c.setting.variable end
         assert_eq(kinds, { "checkbox:PAWNARROWCOLORS_ENABLED", "dropdown:PAWNARROWCOLORS_MAINSCALE", "dropdown:PAWNARROWCOLORS_STYLE",
-            "dropdown:PAWNARROWCOLORS_SCALEAGE", "checkbox:PAWNARROWCOLORS_HITCAP", "dropdown:PAWNARROWCOLORS_HITCAPVALUE" })
+            "dropdown:PAWNARROWCOLORS_SCALEAGE", "checkbox:PAWNARROWCOLORS_HITCAP", "dropdown:PAWNARROWCOLORS_HITCAPVALUE",
+            "checkbox:PAWNARROWCOLORS_WEAPONPAIRS" })
     end)
 
     it("the main scale dropdown lists the visible scales and sets the choice", function()
