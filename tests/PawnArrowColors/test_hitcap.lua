@@ -291,3 +291,31 @@ describe("hit cap", function()
         assert_eq({ db.hitCap, db.hitCapValue, db.hitCapKind }, { true, "auto", { A = "spell" } })
     end)
 end)
+
+describe("hit cap: reading the hit", function()
+    it("a hit change leads to one reset, not to one per later event", function()
+        start()
+        upgradeFor("item:ringHit3", "B")
+        local before = STUB.resets
+        STUB.hit.melee = 4
+        FireEvent("UNIT_STATS", "player")
+        RunAllTimers()
+        FireEvent("UNIT_STATS", "player")
+        RunAllTimers()
+        assert_eq(STUB.resets, before + 1)
+    end)
+
+    it("the hit becoming hidden in combat does not reset Pawn's arrows; readable again with the same value neither", function()
+        start()
+        upgradeFor("item:ringHit3", "B")
+        local before = STUB.resets
+        STUB.hit.melee = "secret"
+        FireEvent("UNIT_STATS", "player")
+        RunAllTimers()
+        assert_eq(STUB.resets, before)
+        STUB.hit.melee = 5
+        FireEvent("PLAYER_REGEN_ENABLED")
+        RunAllTimers()
+        assert_eq(STUB.resets, before)
+    end)
+end)

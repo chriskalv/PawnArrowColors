@@ -198,18 +198,22 @@ function ns.SetScaleHitKind(name, kind)
     ns.Recompute()
 end
 
--- Re-reads the character's hit after events that may change it; a change means new decisions.
+-- Re-reads the character's hit after events that may change it; a change means new decisions. A
+-- hidden (secret) value is not compared: the decisions made before stay until the hit can be read
+-- again (decisions made while it is hidden leave Pawn's answers as they are, Upgrade.lua).
 function ns.CheckHit()
     ns.hitCheckPending = false
     if not ns.adjustActive or not ns.lastHit then return end
+    local changed = false
     for _, hand in ipairs({ "melee", "ranged", "spell" }) do
         local now, problem = ns.ReadHit(hand)
         local before = ns.lastHit[hand]
-        if now ~= before.value or problem ~= before.problem then
-            ns.Recompute()
-            return
+        if problem ~= "secret" and (now ~= before.value or problem ~= before.problem) then
+            ns.lastHit[hand] = { value = now, problem = problem }
+            changed = true
         end
     end
+    if changed then ns.Recompute() end
 end
 
 function ns.QueueHitCheck()
