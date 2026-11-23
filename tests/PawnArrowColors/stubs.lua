@@ -11,8 +11,9 @@
 --
 -- Configuration (all fields optional):
 --   pawn          false: Pawn is not loaded. Otherwise a table:
---     scales      list of { name, label, visible } in the order of Pawn's scale list
---                 (default: "A" Holy, "B" Retribution, "C" Protection (hidden))
+--     scales      list of { name, label, visible, provider, values } in the order of Pawn's scale
+--                 list (default: "A" Holy, "B" Retribution, "C" Protection (hidden)); values are the
+--                 stat weights (PawnCommon.Scales[name].Values), provider marks a plugin's scale
 --     upgrades    item link -> list of internal scale names the item is an upgrade for
 --     ilvl        item link -> true: an item level upgrade (only used when upgrades has no entry)
 --     unknown     item link -> number of PawnIsItemAnUpgrade calls that return nothing first
@@ -27,6 +28,7 @@
 --   blizzard      false: no Blizzard container frames
 --   saved         PawnArrowColorsCharDB as saved before the login
 --   settings      false: no Settings API
+--   level         the character's level (UnitLevel("player"), default 20)
 
 REAL_PRINT = print
 unpack = unpack or table.unpack
@@ -240,7 +242,12 @@ local function installPawn(cfg)
         print("ERROR:  Can't " .. what .. " until Pawn is initialized")
     end
 
-    PawnCommon = { ShowBagUpgradeAdvisor = cfg.advisor ~= false }
+    -- Like Pawn's saved variable: the scales with their values (Pawn.lua keeps them in PawnCommon.Scales).
+    PawnCommon = { ShowBagUpgradeAdvisor = cfg.advisor ~= false, Scales = {} }
+    for _, s in ipairs(cfg.scales) do
+        s.values = s.values or { Strength = 1 }
+        PawnCommon.Scales[s.name] = { LocalizedName = s.label, Values = s.values, Provider = s.provider and "Plugin" or nil }
+    end
 
     local function visible(name)
         for _, s in ipairs(cfg.scales) do
@@ -264,7 +271,7 @@ local function installPawn(cfg)
         if not initialized then return notInitialized("get scale list") end
         local out = {}
         for _, s in ipairs(cfg.scales) do
-            out[#out + 1] = { Name = s.name, LocalizedName = s.label, IsVisible = s.visible, IsProvider = false }
+            out[#out + 1] = { Name = s.name, LocalizedName = s.label, IsVisible = s.visible, IsProvider = s.provider and true or false }
         end
         return out
     end
@@ -555,6 +562,11 @@ end
 
 function InstallStubs(config)
     installBasics()
+    STUB.level = config.level or 20
+    UnitLevel = function(unit)
+        if unit == "player" then return STUB.level end
+        return nil
+    end
     containerAPI()
     if config.pawn ~= false then
         installPawn(config.pawn or {})
@@ -593,4 +605,10 @@ function Login(opts)
     if STUB.elvInitialize and not opts.elvLate then STUB.elvInitialize() end
     FireEvent("PLAYER_LOGIN")
     if not opts.noTimers then RunAllTimers() end
+end
+
+-- A level up: the new level, then the event with it as its first payload value.
+function LevelUp(level)
+    STUB.level = level
+    FireEvent("PLAYER_LEVEL_UP", level, 0, 0, 0)
 end

@@ -52,6 +52,8 @@ local function printPawnProblem()
     end
 end
 
+table.insert(ns.statusLines, 1, function() if ns.pawnOK then ns.PrintAgeStatus() end end)
+
 local function printStatus()
     if not ns.loggedIn then
         ns.Print("not ready yet; try again after the login.")
@@ -78,6 +80,30 @@ local function printStatus()
     if not ns.paths.elvui.active and type(PawnCommon) == "table" and not PawnCommon.ShowBagUpgradeAdvisor then
         ns.Print("Pawn's own bag arrows are off: Pawn > Options > \"Show bag upgrade advisor\".")
     end
+    for _, extra in ipairs(ns.statusLines) do extra() end
+end
+
+-- The state of the scale age hint, with one line per scale.
+function ns.PrintAgeStatus()
+    local n = ns.db.scaleAgeLevels
+    if n <= 0 then
+        ns.Print("scale age hint: off (/pac age <levels> turns it on).")
+        return
+    end
+    local level = ns.PlayerLevel()
+    ns.Print(string.format("scale age hint: after %d level%s, below level %d.", n, n == 1 and "" or "s", ns.AGE_LAST_LEVEL))
+    local list = ns.AgeScales()
+    if #list == 0 then
+        print("  no visible scale of your own (scales of plugins are not counted)")
+    end
+    for _, s in ipairs(list) do
+        local age, from = ns.ScaleAge(s.name, level)
+        if age then
+            print(string.format("  %s: weights from level %d, now %d (%d level%s)", ns.ScaleText(s, list), from, level, age, age == 1 and "" or "s"))
+        else
+            print(string.format("  %s: not seen yet", ns.ScaleText(s, list)))
+        end
+    end
 end
 
 local function printList()
@@ -102,6 +128,8 @@ local function printHelp()
     print("  /pac main default - first visible scale as the main scale")
     print("  /pac on | off - color the arrows or leave them all green")
     print("  /pac style yellow | tint - own yellow arrow, or the original arrow tinted yellow")
+    print("  /pac age <levels> | off - hint when a scale's weights are that many levels old (default 3)")
+    for _, line in ipairs(ns.helpLines) do print(line) end
     print("  /pac refresh - forget the cached results and repaint; checks Pawn again if it was not ready")
     print("  /pac options - open the settings page")
 end
@@ -161,6 +189,20 @@ function ns.SlashCommand(input)
         else
             printPawnProblem()
         end
+    elseif cmd == "age" then
+        local arg = string.lower(rest)
+        local n = tonumber(arg)
+        if arg == "off" then n = 0 elseif arg == "on" then n = ns.AGE_DEFAULT end
+        if arg == "" then
+            ns.PrintAgeStatus()
+        elseif n and n >= 0 and n == math.floor(n) then
+            ns.SetScaleAgeLevels(n)
+            ns.PrintAgeStatus()
+        else
+            ns.Print("age takes a whole number of levels, on (" .. ns.AGE_DEFAULT .. ") or off.")
+        end
+    elseif ns.commands[cmd] then
+        ns.commands[cmd](rest)
     elseif cmd == "options" or cmd == "config" then
         if ns.settingsCategory and Settings and Settings.OpenToCategory then
             Settings.OpenToCategory(ns.settingsCategory:GetID())
@@ -223,6 +265,21 @@ local function buildSettings()
         for _, s in ipairs(ns.STYLES) do container:Add(s, ns.STYLE_LABELS[s]) end
         return container:GetData()
     end, "Yellow arrow: an own yellow arrow graphic. Tinted original arrow: the green arrow of Pawn or ElvUI, desaturated and tinted yellow.")
+
+    local age = Settings.RegisterProxySetting(category, "PAWNARROWCOLORS_SCALEAGE", varType.Number or "number",
+        "Scale age hint", ns.AGE_DEFAULT,
+        function() return ns.db.scaleAgeLevels end,
+        function(value) ns.SetScaleAgeLevels(value) end)
+    Settings.CreateDropdown(category, age, function()
+        local container = Settings.CreateControlTextContainer()
+        container:Add(0, "Off")
+        local current = ns.db.scaleAgeLevels
+        for i = 1, ns.AGE_MAX do container:Add(i, i == 1 and "after 1 level" or string.format("after %d levels", i)) end
+        if current > ns.AGE_MAX then container:Add(current, string.format("after %d levels", current)) end
+        return container:GetData()
+    end, "A chat line after the login or a level up (below level 60) when the weights of one of your own visible scales are that many levels old. Plugin scales are not counted.")
+
+    for _, add in ipairs(ns.settingsBuilders) do add(category, varType) end
 
     Settings.RegisterAddOnCategory(category)
     return category

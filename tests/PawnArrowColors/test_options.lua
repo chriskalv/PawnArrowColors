@@ -139,12 +139,13 @@ describe("slash command", function()
 end)
 
 describe("settings page", function()
-    it("registers a category with a checkbox and two dropdowns", function()
+    it("registers a category with the controls of every feature", function()
         start()
         assert_eq(STUB.settings.registered.name, "Pawn Arrow Colors")
         local kinds = {}
         for _, c in ipairs(STUB.settings.controls) do kinds[#kinds + 1] = c.kind .. ":" .. c.setting.variable end
-        assert_eq(kinds, { "checkbox:PAWNARROWCOLORS_ENABLED", "dropdown:PAWNARROWCOLORS_MAINSCALE", "dropdown:PAWNARROWCOLORS_STYLE" })
+        assert_eq(kinds, { "checkbox:PAWNARROWCOLORS_ENABLED", "dropdown:PAWNARROWCOLORS_MAINSCALE", "dropdown:PAWNARROWCOLORS_STYLE",
+            "dropdown:PAWNARROWCOLORS_SCALEAGE" })
     end)
 
     it("the main scale dropdown lists the visible scales and sets the choice", function()

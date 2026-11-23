@@ -55,6 +55,17 @@ end
 -- Saved settings (per character)
 -- ---------------------------------------------------------------------------------------------
 
+-- Functions that check and default the saved settings of the other files (Age.lua, HitCap.lua, Pairs.lua);
+-- each is called with the table of saved settings.
+ns.dbInits = {}
+
+-- What the features add to Options.lua: status lines of /pac (functions), help lines (text),
+-- commands (name -> function(rest)) and builders of settings (function(category, varType)).
+ns.statusLines = {}
+ns.helpLines = {}
+ns.commands = {}
+ns.settingsBuilders = {}
+
 local function isStyle(v)
     for _, s in ipairs(ns.STYLES) do
         if s == v then return true end
@@ -69,6 +80,7 @@ function ns.InitDB()
     if type(db.enabled) ~= "boolean" then db.enabled = true end
     if not isStyle(db.style) then db.style = "texture" end
     if db.mainScale ~= nil and (type(db.mainScale) ~= "string" or db.mainScale == "") then db.mainScale = nil end
+    for _, init in ipairs(ns.dbInits) do init(db) end
     ns.db = db
     return db
 end
@@ -111,7 +123,7 @@ function ns.IsPawnReady()
 end
 
 -- The scales visible for this character, in the order of Pawn's scale list:
--- { { name = internal name, label = display name }, ... }
+-- { { name = internal name, label = display name, provider = true for a scale of a plugin }, ... }
 function ns.GetVisibleScales()
     local list = {}
     if not ns.IsPawnReady() then return list end
@@ -120,7 +132,7 @@ function ns.GetVisibleScales()
     for _, s in ipairs(all) do
         if type(s) == "table" and s.IsVisible and type(s.Name) == "string" then
             local label = type(s.LocalizedName) == "string" and s.LocalizedName ~= "" and s.LocalizedName or s.Name
-            list[#list + 1] = { name = s.Name, label = label }
+            list[#list + 1] = { name = s.Name, label = label, provider = s.IsProvider and true or false }
         end
     end
     return list
@@ -309,6 +321,9 @@ function ns.ScheduleRetry()
     end)
 end
 
+-- Functions of the other files that forget their own cached results; called by ns.Invalidate.
+ns.onInvalidate = {}
+
 -- Forgets every decision and the main scale (Pawn reset its bags, the gear or the main scale changed),
 -- then repaints the visible arrows on the next frame.
 --
@@ -320,6 +335,7 @@ function ns.Invalidate()
     ns.cache = {}
     ns.mainResolved, ns.mainScale, ns.mainIsSaved = nil, nil, nil
     ns.retries = 0
+    for _, fn in ipairs(ns.onInvalidate) do fn() end
     ns.QueueRefresh()
 end
 
@@ -368,6 +384,9 @@ function ns.OnEquipmentChanged()
         if ns.equipPending then ns.Invalidate() end
     end)
 end
+
+-- Functions of the other files that run once the addon is set up (Pawn ready), before the first repaint.
+ns.onSetup = {}
 
 local function setupTimer()
     ns.setupPending = false
@@ -418,6 +437,7 @@ function ns.Setup()
         local path = ns.paths[name]
         path.active = path.Setup() and true or false
     end
+    for _, fn in ipairs(ns.onSetup) do fn() end
     if ns.RegisterSettings then ns.RegisterSettings() end
     ns.QueueRefresh()
     return true
@@ -435,11 +455,25 @@ function ns.RetrySetup()
     return ns.Setup()
 end
 
+-- Events of the other files: ns.On(event, fn) registers fn(event, ...) for an event after the login.
+-- An event the client does not know is skipped (RegisterEvent raises an error for it).
+ns.handlers = {}
+
+function ns.On(event, fn)
+    local list = ns.handlers[event]
+    if not list then
+        list = {}
+        ns.handlers[event] = list
+        if ns.eventFrame and ns.loggedIn then pcall(ns.eventFrame.RegisterEvent, ns.eventFrame, event) end
+    end
+    list[#list + 1] = fn
+end
+
 local events = CreateFrame("Frame")
 ns.eventFrame = events
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
-events:SetScript("OnEvent", function(_, event, arg1)
+events:SetScript("OnEvent", function(_, event, arg1, ...)
     if event == "ADDON_LOADED" then
         if arg1 == ADDON_NAME then
             ns.InitDB()
@@ -450,8 +484,13 @@ events:SetScript("OnEvent", function(_, event, arg1)
         ns.loggedIn = true
         events:UnregisterEvent("PLAYER_LOGIN")
         events:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+        for name in pairs(ns.handlers) do pcall(events.RegisterEvent, events, name) end
         ns.Setup()
-    elseif event == "PLAYER_EQUIPMENT_CHANGED" then
-        if ns.setupDone then ns.OnEquipmentChanged() end
+    else
+        if event == "PLAYER_EQUIPMENT_CHANGED" and ns.setupDone then ns.OnEquipmentChanged() end
+        local list = ns.handlers[event]
+        if list and ns.setupDone then
+            for _, fn in ipairs(list) do fn(event, arg1, ...) end
+        end
     end
 end)

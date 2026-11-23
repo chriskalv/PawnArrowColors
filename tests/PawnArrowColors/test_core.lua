@@ -8,7 +8,8 @@ describe("load", function()
         assert_eq(ADDON_TOC["Dependencies"], "Pawn")
         assert_eq(ADDON_TOC["OptionalDeps"], "ElvUI")
         assert_eq(ADDON_TOC["SavedVariablesPerCharacter"], "PawnArrowColorsCharDB")
-        assert_eq(ADDON_FILES, { "PawnArrowColors/Core.lua", "PawnArrowColors/Bags.lua", "PawnArrowColors/Options.lua" })
+        assert_eq(ADDON_FILES, { "PawnArrowColors/Core.lua", "PawnArrowColors/Bags.lua", "PawnArrowColors/Age.lua",
+            "PawnArrowColors/Options.lua" })
     end)
 
     it("the version in the code matches the TOC", function()
@@ -30,7 +31,9 @@ describe("load", function()
     it("saved variables get their defaults", function()
         local ns = ReloadAddon({ saved = { enabled = "yes", style = "pink", mainScale = 5 } })
         Login()
-        assert_eq(PawnArrowColorsCharDB, { enabled = true, style = "texture" })
+        local db = PawnArrowColorsCharDB
+        assert_eq({ db.enabled, db.style, db.mainScale, db.scaleAgeLevels }, { true, "texture", nil, 3 })
+        assert_eq(type(db.scaleAge), "table")
         assert_true(ns.db == PawnArrowColorsCharDB)
     end)
 
@@ -341,12 +344,13 @@ describe("cache", function()
     it("asks Pawn once per link until something is invalidated", function()
         local ns = ReloadAddon({ pawn = { upgrades = { ["item:1"] = { "A" }, ["item:2"] = { "B" } } } })
         Login()
+        local before = STUB.calls.scales -- the scale age reads the list at the login
         for _ = 1, 5 do
             ns.Classify("item:1")
             ns.Classify("item:2")
         end
         assert_eq(STUB.calls.upgrade, 2)
-        assert_eq(STUB.calls.scales, 1, "the main scale is resolved once")
+        assert_eq(STUB.calls.scales - before, 1, "the main scale is resolved once")
     end)
 
     it("PawnResetBags forgets the results", function()
