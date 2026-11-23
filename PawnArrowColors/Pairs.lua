@@ -79,7 +79,9 @@ local function offHandWeaponAllowed(scale)
 end
 
 -- The partners from the bags for a candidate: items for the other hand, usable now, worth more than 0
--- for the scale. side: where the partner goes ("off" or "main").
+-- for the scale. side: where the partner goes ("off" or "main"). Second value true when a fitting
+-- item has no data yet (the client or Pawn is still loading it, as Pawn says for its own arrows by
+-- returning nil): then the decision waits.
 function ns.PairPartners(item, side, scaleName, scale)
     local cand = PawnUnenchantItemLink(item.Link, true)
     local bag = ns.BagHandItems()
@@ -89,7 +91,7 @@ function ns.PairPartners(item, side, scaleName, scale)
     end
     local level = ns.PlayerLevel()
     local offWeapon = offHandWeaponAllowed(scale)
-    local out = {}
+    local out, pending = {}, false
     for _, b in ipairs(bag) do
         local fits
         if side == "off" then
@@ -102,22 +104,25 @@ function ns.PairPartners(item, side, scaleName, scale)
         if fits and (PawnUnenchantItemLink(b.link, true) ~= cand or copies >= 2) then
             local data = PawnGetItemData(b.link)
             local _, _, _, _, minLevel = C_Item.GetItemInfo(b.link)
-            if type(data) == "table" and data.Link ~= nil and data.CanEquip ~= false and type(minLevel) == "number"
-                and level and minLevel <= level and ns.CompareValue(data, scaleName) > 0 then
+            if type(data) ~= "table" or data.Link == nil or type(minLevel) ~= "number" then
+                pending = true
+            elseif data.CanEquip ~= false and level and minLevel <= level and ns.CompareValue(data, scaleName) > 0 then
                 out[#out + 1] = data
             end
         end
     end
-    return out
+    return out, pending
 end
 
-local function sumOf(list, scaleName)
-    local v, h = 0, 0
+-- Value, valued hit and the hit Pawn does not value (ns.ItemExtraHit) of a set of items.
+local function sumOf(list, scaleName, ctx)
+    local v, h, x = 0, 0, 0
     for _, it in ipairs(list) do
         v = v + ns.CompareValue(it, scaleName)
         h = h + ns.ItemHit(it)
+        x = x + ns.ItemExtraHit(it, ctx)
     end
-    return v, h
+    return v, h, x
 end
 
 local function name(item)
@@ -131,12 +136,18 @@ end
 
 -- The decision for one scale when Pawn does not compare (Upgrade.lua: HandMismatch). mismatch: "2h"
 -- (a two-hand candidate, one-hand items equipped) or "1h". Returns a verdict ({ kind = "upgrade",
--- percent, existing } or { kind = "none" }) and the tooltip line.
+-- percent, existing } or { kind = "none" }) and the tooltip line. While a partner in the bags has no
+-- data yet: no verdict (Pawn's answer stays), nothing is kept, and the arrival of item data
+-- (GET_ITEM_INFO_RECEIVED) leads to new decisions.
 function ns.PairVerdict(item, scaleName, scale, gear, mismatch, label)
     local key = scaleName .. "\0" .. item.Link
     local cached = ns.pairCache[key]
     if cached then return cached.verdict, cached.note end
-    local verdict, note = ns.ComputePair(item, scaleName, scale, gear, mismatch, label)
+    local verdict, note, pending = ns.ComputePair(item, scaleName, scale, gear, mismatch, label)
+    if pending then
+        ns.pairsPending = true
+        return nil, nil
+    end
     ns.pairCache[key] = { verdict = verdict, note = note }
     return verdict, note
 end
@@ -157,10 +168,10 @@ function ns.ComputePair(item, scaleName, scale, gear, mismatch, label)
     local equipped = {}
     if main then equipped[#equipped + 1] = main.item end
     if off then equipped[#equipped + 1] = off.item end
-    local eqValue, eqHit = sumOf(equipped, scaleName)
+    local eqValue, eqHit, eqExtra = sumOf(equipped, scaleName, ctx)
     local eqCtx = ctx
     if weaponCtx and gear.dualWield then eqCtx = nil end
-    local eqCapped, eqCounted = ns.CappedValue(eqValue, eqHit, room, eqCtx)
+    local eqCapped, eqCounted = ns.CappedValue(eqValue, eqHit, room, eqCtx, eqExtra)
 
     local candSet, partner, sideText
     local candDual = false
@@ -175,9 +186,11 @@ function ns.ComputePair(item, scaleName, scale, gear, mismatch, label)
             return p ~= nil and ns.OFF_HAND_WEAPON[p.InvType] == true
         end
         local best, bestValue
-        for _, p in ipairs(ns.PairPartners(item, side, scaleName, scale)) do
-            local v, h = sumOf({ item, p }, scaleName)
-            local capped = ns.CappedValue(v, h, room, (weaponCtx and dual(p)) and nil or ctx)
+        local partners, pending = ns.PairPartners(item, side, scaleName, scale)
+        if pending then return nil, nil, true end
+        for _, p in ipairs(partners) do
+            local v, h, x = sumOf({ item, p }, scaleName, ctx)
+            local capped = ns.CappedValue(v, h, room, (weaponCtx and dual(p)) and nil or ctx, x)
             if not bestValue or capped > bestValue then best, bestValue = p, capped end
         end
         partner = best
@@ -188,8 +201,8 @@ function ns.ComputePair(item, scaleName, scale, gear, mismatch, label)
         candSet = partner and { item, partner } or { item }
         sideText = partner and ("with " .. name(partner)) or "alone (no item for the off hand in your bags)"
     end
-    local candValueSum, candHit = sumOf(candSet, scaleName)
-    local candCapped, candCounted = ns.CappedValue(candValueSum, candHit, room, (weaponCtx and candDual) and nil or ctx)
+    local candValueSum, candHit, candExtra = sumOf(candSet, scaleName, ctx)
+    local candCapped, candCounted = ns.CappedValue(candValueSum, candHit, room, (weaponCtx and candDual) and nil or ctx, candExtra)
 
     local verdict, note
     if candCapped > eqCapped * ns.UPGRADE_FACTOR then
@@ -222,6 +235,20 @@ ns.On("PLAYER_EQUIPMENT_CHANGED", function() ns.pairCache = {} end)
 table.insert(ns.onSetup, function()
     ns.bagItems = nil
     ns.BagHandItems()
+end)
+
+-- Item data arrived while a pair decision waited for it: decide again (once for several items).
+ns.ITEM_INFO_DELAY = 0.5
+ns.On("GET_ITEM_INFO_RECEIVED", function()
+    if not ns.pairsPending or ns.itemInfoQueued then return end
+    ns.itemInfoQueued = true
+    C_Timer.After(ns.ITEM_INFO_DELAY, function()
+        ns.itemInfoQueued = false
+        if not ns.pairsPending then return end
+        ns.pairsPending = false
+        ns.pairCache = {}
+        if ns.db.weaponPairs and ns.adjustActive then ns.Recompute() end
+    end)
 end)
 
 -- The bags changed: when the weapons and off-hand items in them are others now, the decisions change

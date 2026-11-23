@@ -163,7 +163,7 @@ function ns.ModelScale(item, scaleName, scale, gear, ctx)
         if not ctx then return v end
         local room = ns.HitRoom(ctx, gear, { slot })
         local h = ns.ItemHit(entry.item)
-        local capped, counted = ns.CappedValue(v, h, room, ctx)
+        local capped, counted = ns.CappedValue(v, h, room, ctx, ns.ItemExtraHit(entry.item, ctx))
         return capped, { total = h, counted = counted, room = room }
     end
     local candValue = ns.CompareValue(item, scaleName)
@@ -189,7 +189,7 @@ function ns.ModelScale(item, scaleName, scale, gear, ctx)
     if ctx then
         local room = ns.HitRoom(ctx, gear, lo and { lo.slot } or {})
         local counted
-        candValue, counted = ns.CappedValue(candValue, candHit, room, ctx)
+        candValue, counted = ns.CappedValue(candValue, candHit, room, ctx, ns.ItemExtraHit(item, ctx))
         candHitInfo = { total = candHit, counted = counted, room = room }
     end
     local verdict
@@ -361,15 +361,17 @@ end
 
 -- Forgets the equipped items and asks Pawn to rate its bag arrows again (its bag code skips buttons
 -- it already rated). Pawn's PawnResetBags runs the addon's own invalidation through the hook in Core.lua.
+-- ElvUI's arrows do not follow PawnResetBags; Bags.lua lets ElvUI decide them again.
 function ns.Recompute()
     ns.gear = nil
     if ns.pairsChanged then ns.pairsChanged() end
     if not ns.setupDone then return end
+    local reset = false
     if type(PawnResetBags) == "function" and ns.adjustActive then
-        local ok = pcall(PawnResetBags)
-        if ok then return end
+        reset = pcall(PawnResetBags)
     end
-    ns.Invalidate()
+    if not reset then ns.Invalidate() end
+    if ns.adjustActive and ns.paths.elvui and ns.paths.elvui.Reevaluate then ns.paths.elvui.Reevaluate() end
 end
 
 table.insert(ns.onInvalidate, function()
@@ -382,6 +384,9 @@ ns.On("PLAYER_EQUIPMENT_CHANGED", function() ns.gear = nil end)
 
 local function addNotes(tooltipName, methodName, ...)
     if not ns.adjustActive or ns.adjustBroken then return end
+    -- Pawn asks PawnIsItemAnUpgrade for its tooltip only with "show upgrades in tooltips" on
+    -- (Pawn.lua:1813); without that question the notes would be left over from a bag check.
+    if not (type(PawnCommon) == "table" and PawnCommon.ShowUpgradesOnTooltips) then return end
     local tooltip = _G[tooltipName]
     if type(tooltip) ~= "table" or type(tooltip.AddLine) ~= "function" then return end
     local ok, link = pcall(PawnGetItemLinkFromTooltipNameAndMethod, tooltipName, methodName, ...)

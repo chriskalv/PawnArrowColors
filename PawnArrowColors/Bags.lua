@@ -57,6 +57,36 @@ function elvui.Setup()
     return true
 end
 
+-- Calls func(slot) for every ElvUI slot (bags and bank) that exists, reading ElvUI's frame list only.
+local function eachSlot(func)
+    local frames = elvui.B and elvui.B.BagFrames
+    if type(frames) ~= "table" then return end
+    for _, frame in pairs(frames) do
+        local bags = type(frame) == "table" and frame.Bags
+        if type(bags) == "table" then
+            for _, bag in pairs(bags) do
+                if type(bag) == "table" then
+                    for slotID, slot in pairs(bag) do
+                        if type(slotID) == "number" then func(slot) end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Lets ElvUI decide its arrows again after the addon's answers changed (hit cap and weapon pairs).
+-- ElvUI does not register with Pawn's PawnResetBags and asks Pawn only when it updates a slot, so
+-- the addon calls ElvUI's own B:UpdateItemUpgradeIcon(slot) for every slot with an arrow, the way
+-- ElvUI's slot update does (Bags.lua: "if slot.UpgradeIcon then B:UpdateItemUpgradeIcon(slot) end");
+-- the post-hook above then paints.
+function elvui.Reevaluate()
+    if not elvui.active or type(elvui.B) ~= "table" or type(elvui.B.UpdateItemUpgradeIcon) ~= "function" then return end
+    eachSlot(function(slot)
+        if type(slot) == "table" and slot.UpgradeIcon then pcall(elvui.B.UpdateItemUpgradeIcon, elvui.B, slot) end
+    end)
+end
+
 -- Repaints every ElvUI slot (bags and bank) that exists, reading ElvUI's frame list only.
 function elvui.Refresh()
     local frames = elvui.B and elvui.B.BagFrames

@@ -28,6 +28,11 @@ local function items()
         ["item:offdagger"] = { inv = "INVTYPE_WEAPONOFFHAND", stats = { Strength = 5, MeleeDps = 3, IsOffHand = 1 }, name = "Parrying Dagger", id = 9 },
         ["item:boots"] = { inv = "INVTYPE_FEET", stats = { Stamina = 5 }, name = "Boots", id = 10 },
         ["item:classlocked"] = { inv = "INVTYPE_SHIELD", stats = { Stamina = 60, IsShield = 1 }, name = "Totem Shield", id = 11, canEquip = false },
+        ["item:bigsword"] = { inv = "INVTYPE_2HWEAPON", stats = { Strength = 26, MeleeDps = 10 }, name = "Heavy Greatsword", id = 12 },
+        ["item:bigmace"] = { inv = "INVTYPE_WEAPONMAINHAND", stats = { Strength = 40, MeleeDps = 8 }, name = "Great Mace", id = 13 },
+        ["item:staff"] = { inv = "INVTYPE_2HWEAPON", stats = { SpellDamage = 30 }, name = "Staff", id = 14 },
+        ["item:spellmace"] = { inv = "INVTYPE_WEAPONMAINHAND", stats = { SpellDamage = 20, HitRating = 2 }, name = "Spell Mace", id = 15 },
+        ["item:aimtome"] = { inv = "INVTYPE_HOLDABLE", stats = { SpellDamage = 15, SpellHitRating = 1 }, name = "Tome of Aim", id = 16 },
     }
 end
 
@@ -40,6 +45,7 @@ local function start(opts)
         dualWield = opts.dualWield,
         saved = opts.saved,
         pawn = { scales = opts.scales or scales(), items = items(), tracking = opts.tracking, options = opts.options },
+        elvui = opts.elvui,
     }
     local ns = ReloadAddon(cfg)
     for i, link in ipairs(opts.bags or {}) do PutItem(0, i, link) end
@@ -219,5 +225,63 @@ describe("weapon pairs: settings and invalidation", function()
         start()
         STUB.settings.settings.PAWNARROWCOLORS_WEAPONPAIRS:SetValue(false)
         assert_false(PawnArrowColorsCharDB.weaponPairs)
+    end)
+end)
+
+describe("weapon pairs: edge cases", function()
+    it("a scale with X on IsOffHand takes no one-hand weapon as off-hand partner", function()
+        local ns = start({ bags = { "item:mace", "item:hitmace" } })
+        -- Retribution: the Keen Mace (50) would make 90 against 70, but it cannot go into the off hand
+        assert_nil(upgradeFor("item:mace", "B"))
+        assert_contains(notes(ns, "item:mace"), "Retribution: alone (no item for the off hand in your bags)")
+        assert_contains(notes(ns, "item:mace"), "Protection: with Keen Mace")
+    end)
+
+    it("an off-hand candidate worth 0 is no upgrade, whatever its partner", function()
+        start({ bags = { "item:tome", "item:bigmace" } })
+        -- Retribution values the tome 0; the Great Mace alone (80) would beat the Greatsword (70)
+        assert_nil(upgradeFor("item:tome", "B"))
+    end)
+
+    it("two weapons equipped against a two-hand weapon: the equipped hit counts in full, the two-hand weapon's is capped", function()
+        start({ equipped = { [16] = "item:mace", [17] = "item:hitmace" }, hit = { melee = 7, spell = 0 } })
+        -- Protection: Mace 22 + Keen Mace 27 = 49 (no cap while dual wielding); Heavy Greatsword 46
+        assert_nil(upgradeFor("item:bigsword", "P"))
+    end)
+
+    it("spell cap: the partner's spell hit (worth 0 to Pawn) fills the room before the candidate's hit", function()
+        local sc = { { name = "H", label = "Fire", visible = true, values = { Intellect = 1, SpellDamage = 1, HitRating = 10 } } }
+        local ns = start({ scales = sc, equipped = { [16] = "item:staff" }, bags = { "item:spellmace", "item:aimtome" }, hit = { melee = 0, spell = 4 } })
+        -- room 1, taken by the tome's 1% spell hit: the mace's 2% hit count 0 (35 against 30)
+        assert_near(upgradeFor("item:spellmace", "H").PercentUpgrade, (35 - 30) / 30, 1e-9)
+        assert_contains(notes(ns, "item:spellmace"), "Fire: with Tome of Aim, against Staff; hit 0.0% of 2.0% counted (cap 5.0%)")
+    end)
+
+    it("a partner whose data is still loading: no decision kept, a new one once the data arrived", function()
+        local ns = start({ bags = { "item:mace", "item:shield" } })
+        ns.pairsChanged() -- a new decision (as after a gear change) ...
+        STUB.pawn.nolink["item:shield"] = 2 -- ... while Pawn has no stats for the shield yet (asked once per scale)
+        assert_nil(upgradeFor("item:mace", "P"), "Pawn's answer while the shield has no data")
+        assert_nil(ns.pairCache["P\0item:mace"], "nothing kept")
+        local before = STUB.resets
+        FireEvent("GET_ITEM_INFO_RECEIVED", 5, true)
+        FireEvent("GET_ITEM_INFO_RECEIVED", 3, true)
+        RunAllTimers()
+        assert_eq(STUB.resets, before + 1, "one new rating for both events")
+        assert_near(upgradeFor("item:mace", "P").PercentUpgrade, (22 + 35 - 40) / 40, 1e-9)
+        assert_contains(notes(ns, "item:mace"), "Protection: with Kite Shield")
+        FireEvent("GET_ITEM_INFO_RECEIVED", 7, true)
+        RunAllTimers()
+        assert_eq(STUB.resets, before + 1, "nothing waits any more")
+    end)
+
+    it("ElvUI's arrows follow a changed setting without a slot update by ElvUI", function()
+        start({ bags = { "item:mace", "item:shield" }, elvui = {} })
+        local slot = ElvUpdate(STUB.elvBags, 0, 1)
+        assert_true(slot.UpgradeIcon:IsShown(), "the mace with the shield, for Protection")
+        slash("pairs off")
+        assert_false(slot.UpgradeIcon:IsShown(), "ElvUI asked again")
+        slash("pairs on")
+        assert_true(slot.UpgradeIcon:IsShown())
     end)
 end)

@@ -21,10 +21,18 @@ ns.HIT_CAPS = {
 }
 ns.HIT_BOSS_LEVEL = 60
 ns.HIT_KINDS = { weapon = true, spell = true }
--- A scale counts against the weapon cap when one point of weapon DPS is worth at least this much
--- (in the scale's own units, where one point of the main stat is usually 1), otherwise against the
--- spell cap.
-ns.HIT_WEAPON_DPS_WEIGHT = 1
+-- Which cap a scale counts against comes from its weights (ns.ScaleHitKind): the weight of the
+-- physical main stats and attack power against the weight of spell power.
+ns.PHYSICAL_STATS = { "Strength", "Agility", "Ap", "Rap" }
+ns.SPELL_POWER_STATS = {
+    "SpellPower", "SpellDamage", "Healing", "SpellDamageAndHealing", "SpellDamageNoHealing", "ArcaneSpellDamage",
+    "FireSpellDamage", "FrostSpellDamage", "HolySpellDamage", "NatureSpellDamage", "ShadowSpellDamage",
+}
+-- The weapon cap while the physical weight is at least this share of the spell power weight. A
+-- hybrid that fights with its weapon and with spells (a Protection Paladin: seals, Judgement and
+-- white swings roll against the melee table) stays on the weapon cap; a caster that only melees
+-- on the side (Shockadin) goes to the spell cap.
+ns.HIT_PHYSICAL_SHARE = 1 / 3
 ns.WEAPON_DPS_STATS = { "Dps", "MeleeDps", "MainHandDps", "OffHandDps", "OneHandDps", "TwoHandDps", "RangedDps" }
 -- Rating indices of the client (Blizzard_UIPanels_Game: CR_HIT_MELEE 6, CR_HIT_RANGED 7, CR_HIT_SPELL 8).
 local CR_INDEX = { melee = 6, ranged = 7, spell = 8 }
@@ -50,19 +58,29 @@ function ns.ScaleValues(name)
     return type(scale) == "table" and type(scale.Values) == "table" and scale.Values or nil
 end
 
+local function largest(values, stats)
+    local best = 0
+    for _, stat in ipairs(stats) do
+        local w = values[stat]
+        if type(w) == "number" and w > best then best = w end
+    end
+    return best
+end
+
 -- Which cap a scale counts against: "weapon" or "spell", and whether that was set by hand.
--- Rule: the weapon cap when the largest weight of a weapon DPS stat is at least
--- ns.HIT_WEAPON_DPS_WEIGHT, otherwise the spell cap; /pac hitcap <scale> weapon | spell overrides it.
+-- Rule: P = the largest weight of Strength, Agility, Ap, Rap; S = the largest weight of a spell
+-- power stat. Spell cap when S > 0 and P < S * ns.HIT_PHYSICAL_SHARE, weapon cap when P > 0
+-- otherwise. With neither (a scale of hit and weapon DPS only): the weapon cap when a weapon DPS
+-- stat has a positive weight, otherwise the spell cap. Weapon DPS alone does not decide: casters'
+-- scales often weigh a wand's RangedDps highly. /pac hitcap <scale> weapon | spell overrides it.
 function ns.ScaleHitKind(name)
     local set = ns.db and ns.db.hitCapKind[name]
     if set then return set, true end
     local values = ns.ScaleValues(name) or {}
-    local best = 0
-    for _, stat in ipairs(ns.WEAPON_DPS_STATS) do
-        local w = values[stat]
-        if type(w) == "number" and w > best then best = w end
-    end
-    return best >= ns.HIT_WEAPON_DPS_WEIGHT and "weapon" or "spell", false
+    local physical, spell = largest(values, ns.PHYSICAL_STATS), largest(values, ns.SPELL_POWER_STATS)
+    if spell > 0 and physical < spell * ns.HIT_PHYSICAL_SHARE then return "spell", false end
+    if physical > 0 then return "weapon", false end
+    return largest(values, ns.WEAPON_DPS_STATS) > 0 and "weapon" or "spell", false
 end
 
 -- For the weapon cap: ranged when the scale weighs ranged DPS more than any melee DPS stat.
@@ -143,7 +161,9 @@ function ns.HitContext(name, gear)
     return { kind = kind, hand = hand, cap = cap, hit = hit, unit = unit, spell = kind == "spell" }
 end
 
--- The hit an equipped item adds to the character now (with its enchantment), for the rule's kind.
+-- The hit an equipped item adds to the character now (with its enchantment), for the rule's kind:
+-- HitRating, and for the spell cap also SpellHitRating (lines "with spells", which Pawn on Forever
+-- reads as SpellHitRating and values 0).
 function ns.HitAdded(entry, ctx)
     local stats = entry.stats or {}
     local h = type(stats.HitRating) == "number" and stats.HitRating or 0
@@ -155,6 +175,16 @@ end
 function ns.ItemHit(item)
     local stats = type(item) == "table" and item.UnenchantedStats
     local h = type(stats) == "table" and stats.HitRating
+    return type(h) == "number" and h > 0 and h or 0
+end
+
+-- The hit of an item that Pawn does not value but that still fills the room under the cap: its
+-- SpellHitRating for the spell cap, 0 otherwise. Both sides of a comparison (the candidate and the
+-- equipped item) are measured alike: this hit fills the room first, the valued hit gets what is left.
+function ns.ItemExtraHit(item, ctx)
+    if not (ctx and ctx.spell) then return 0 end
+    local stats = type(item) == "table" and item.UnenchantedStats
+    local h = type(stats) == "table" and stats.SpellHitRating
     return type(h) == "number" and h > 0 and h or 0
 end
 
@@ -171,10 +201,16 @@ function ns.HitRoom(ctx, gear, slots)
 end
 
 -- The value of a set of items that would fill those slots, with hit beyond the room not counted.
--- values, hits: sums over the set. Returns the value and the hit that counts.
-function ns.CappedValue(value, hit, room, ctx)
-    if not ctx or hit <= room then return value, hit end
-    return value - ctx.unit * (hit - room), room
+-- values, hits: sums over the set; extra: hit of the set Pawn does not value (ns.ItemExtraHit).
+-- Returns the value and the hit that counts. An item Pawn values at 0 or less (an X value of the
+-- scale) stays as it is, and the result never goes below 0.
+function ns.CappedValue(value, hit, room, ctx, extra)
+    if not ctx or value <= 0 then return value, hit end
+    room = room - (extra or 0)
+    if room < 0 then room = 0 end
+    if hit <= room then return value, hit end
+    local capped = value - ctx.unit * (hit - room)
+    return capped > 0 and capped or 0, room
 end
 
 -- ---------------------------------------------------------------------------------------------

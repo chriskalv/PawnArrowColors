@@ -23,6 +23,11 @@ local function items()
         ["item:headStr"] = { inv = "INVTYPE_HEAD", stats = { Strength = 10 }, name = "Cap", id = 10 },
         ["item:headHit1ench"] = { inv = "INVTYPE_HEAD", stats = { Strength = 6 }, enchant = { HitRating = 1 }, base = "item:headHit1base", name = "Enchanted Cap", id = 11 },
         ["item:headHit1base"] = { inv = "INVTYPE_HEAD", stats = { Strength = 6 }, name = "Enchanted Cap", id = 11 },
+        ["item:neckHit1Str40"] = { inv = "INVTYPE_NECK", stats = { HitRating = 1, Strength = 40 }, name = "Mighty Choker", id = 12 },
+        ["item:mailHelmHit2"] = { inv = "INVTYPE_HEAD", stats = { HitRating = 2, Strength = 5, IsMail = 1 }, name = "Mail Helm", id = 13 },
+        ["item:ringSpellHit2"] = { inv = "INVTYPE_FINGER", stats = { SpellHitRating = 2, Intellect = 10 }, name = "Band of Spells", id = 14 },
+        ["item:ringInt20"] = { inv = "INVTYPE_FINGER", stats = { Intellect = 20 }, name = "Band of Wits", id = 15 },
+        ["item:ringSpellHit1Hit2"] = { inv = "INVTYPE_FINGER", stats = { SpellHitRating = 1, HitRating = 2 }, name = "Band of Aim", id = 16 },
     }
 end
 
@@ -34,7 +39,10 @@ local function start(opts)
         equipped = opts.equipped or { [11] = "item:ringHit1", [12] = "item:ringStr" },
         saved = opts.saved,
         dualWield = opts.dualWield,
-        pawn = { scales = opts.scales or scales(), items = items(), tracking = opts.tracking, answer = opts.answer, missing = opts.missing },
+        pawn = {
+            scales = opts.scales or scales(), items = items(), tracking = opts.tracking, answer = opts.answer, missing = opts.missing,
+            never = opts.never, tooltipUpgrades = opts.tooltipUpgrades,
+        },
     }
     local ns = ReloadAddon(cfg)
     Login()
@@ -317,5 +325,105 @@ describe("hit cap: reading the hit", function()
         FireEvent("PLAYER_REGEN_ENABLED")
         RunAllTimers()
         assert_eq(STUB.resets, before)
+    end)
+end)
+
+describe("hit cap: which cap a scale counts against", function()
+    -- made-up weights in the proportions of the Pawn Forever scales they stand for
+    local kinds = {
+        { name = "mage", label = "Fire", values = { Intellect = 0.9, SpellDamage = 1, FireSpellDamage = 0.9, RangedDps = 7, Agility = 0.01, HitRating = 12 } },
+        { name = "lock", label = "Affliction", values = { Intellect = 0.8, SpellDamage = 1, ShadowSpellDamage = 0.9, RangedDps = 7, HitRating = 12 } },
+        { name = "prot", label = "Protection", values = { Strength = 0.3, Agility = 0.4, Ap = 0.15, Intellect = 0.4, SpellDamage = 0.9, MeleeDps = 0.5, HitRating = 6 } },
+        { name = "shock", label = "Shockadin", values = { Strength = 0.2, Agility = 0.05, Ap = 0.1, Intellect = 0.8, SpellDamage = 1, MeleeDps = 0.4, HitRating = 4 } },
+        { name = "ret", label = "Retribution", values = { Strength = 1, Agility = 0.35, Ap = 0.5, Intellect = 0.7, SpellDamage = 0.25, MeleeDps = 4, HitRating = 13 } },
+        { name = "hunter", label = "Marksmanship", values = { Agility = 1, Rap = 0.45, Intellect = 0.8, MeleeDps = 0.05, RangedDps = 14, HitRating = 23 } },
+        { name = "holy", label = "Holy", values = { Intellect = 1.7, SpellDamage = 1.35, Healing = 1.3, MeleeDps = 0.09, HitRating = 0.5 } },
+        { name = "edge", label = "Edge", values = { Strength = 1, SpellDamage = 3, HitRating = 5 } },
+        { name = "below", label = "Below", values = { Strength = 0.9, SpellDamage = 3, HitRating = 5 } },
+        { name = "bare", label = "Bare", values = { MeleeDps = 0.5, HitRating = 5 } },
+    }
+
+    it("casters with a wand weight count against the spell cap, the Paladin tank and Retribution against the weapon cap", function()
+        local list = {}
+        for _, k in ipairs(kinds) do list[#list + 1] = { name = k.name, label = k.label, visible = true, values = k.values } end
+        local ns = start({ scales = list })
+        local want = {
+            mage = "spell", lock = "spell", prot = "weapon", shock = "spell", ret = "weapon", hunter = "weapon", holy = "spell",
+            edge = "weapon", below = "spell", bare = "weapon",
+        }
+        for name, kind in pairs(want) do assert_eq(ns.ScaleHitKind(name), kind, name) end
+        assert_eq(ns.WeaponHand("hunter"), "ranged")
+        assert_eq(ns.WeaponHand("prot"), "melee")
+        assert_eq(ns.WeaponHand("ret"), "melee")
+        assert_eq(ns.ScaleHitKind("A"), "spell", "Intellect and hit only: no weapon")
+    end)
+end)
+
+describe("hit cap: edge cases", function()
+    it("hit above the cap even without the replaced item: nothing of the new item's hit counts", function()
+        local ns = start({ hit = { melee = 7, spell = 0 }, equipped = { [2] = "item:neckStr30" } })
+        -- Pawn: 50 against 30; the room is 0 (7% without the old neck), not -1: 40 against 30
+        local u = upgradeFor("item:neckHit1Str40", "B")
+        assert_near(u.PercentUpgrade, (40 - 30) / 30, 1e-9)
+        assert_contains(table.concat(ns.notes["item:neckHit1Str40"], "\n"), "this item 0.0% of 1.0%")
+    end)
+
+    it("an equipped item worth 0 (X value) with hit beyond the cap: Pawn's answer, no negative percentage", function()
+        local sc = scales()
+        sc[2].values.IsMail = -1000000
+        start({ scales = sc, hit = { melee = 8, spell = 0 }, equipped = { [1] = "item:mailHelmHit2" } })
+        local raw
+        for _, e in ipairs(STUB.modelIsItemAnUpgrade(PawnGetItemData("item:headStr"))) do if e.ScaleName == "B" then raw = e end end
+        local u = upgradeFor("item:headStr", "B")
+        assert_true(u.PercentUpgrade > 0, "positive")
+        assert_near(u.PercentUpgrade, raw.PercentUpgrade, 1e-6 * raw.PercentUpgrade, "as Pawn: an upgrade over an item worth 0")
+    end)
+
+    it("a capped value never goes below 0, a value of 0 or less stays as it is", function()
+        local ns = start()
+        assert_eq(ns.CappedValue(20, 3, 0, { unit = 10 }), 0)
+        assert_eq(ns.CappedValue(0, 3, 0, { unit = 10 }), 0)
+        assert_eq(ns.CappedValue(-5, 3, 0, { unit = 10 }), -5)
+        assert_eq(ns.CappedValue(40, 3, 2, { unit = 10 }, 1), 20, "hit Pawn does not value fills the room first")
+    end)
+
+    it("an equipped item is the best or second item, as in Pawn", function()
+        local ns = start()
+        local gear = ns.Gear()
+        local scale = PawnCommon.Scales.B
+        assert_eq(ns.ModelScale(PawnGetItemData("item:ringHit1"), "B", scale, gear, nil).kind, "second")
+        assert_eq(ns.ModelScale(PawnGetItemData("item:ringStr"), "B", scale, gear, nil).kind, "best")
+        ns = start({ equipped = { [2] = "item:neckHit4" } })
+        assert_nil(ns.ModelScale(PawnGetItemData("item:neckHit4"), "B", PawnCommon.Scales.B, ns.Gear(), nil), "an equipped item: Pawn's answer stays")
+    end)
+
+    it("an equipped item Pawn never shows upgrades for keeps Pawn's answer", function()
+        start({ hit = { melee = 8, spell = 0 }, equipped = { [2] = "item:neckHit4" }, never = { [4] = true } })
+        -- without the rule the capped old neck (25) would lose to the pendant (30)
+        assert_nil(upgradeFor("item:neckStr30", "B"))
+    end)
+
+    it("spell cap: an item's spell hit (worth 0 to Pawn) counts for the room on both sides", function()
+        local ns = start({ hit = { melee = 0, spell = 5 }, equipped = { [11] = "item:ringSpellHit2", [12] = "item:ringInt20" } })
+        -- Holy: without the weaker ring (10) the spell hit is 3%, room 2: the ring with 3% counts 2 (20 against 10)
+        assert_near(upgradeFor("item:ringHit3", "A").PercentUpgrade, (20 - 10) / 10, 1e-9)
+        -- a ring with 1% spell hit and 2% hit: its spell hit fills 1 of the 2, its hit counts 1 (10 against 10)
+        assert_nil(upgradeFor("item:ringSpellHit1Hit2", "A"))
+        assert_contains(table.concat(ns.notes["item:ringSpellHit1Hit2"], "\n"), "Holy: hit counted up to the cap 5.0% (you 5.0%): this item 1.0% of 2.0%")
+    end)
+
+    it("with hit cap and weapon pairs off the addon does not look at the answer at all", function()
+        local ns = start()
+        slash("hitcap off")
+        slash("pairs off")
+        local calls = ns.adjustStats.calls
+        upgradeFor("item:ringHit3", "B")
+        assert_eq(ns.adjustStats.calls, calls)
+    end)
+
+    it("with Pawn's upgrades in tooltips off, a bag check's notes do not show in the tooltip", function()
+        start({ tooltipUpgrades = false })
+        PawnIsItemAnUpgrade(PawnGetItemData("item:ringHit3")) -- the bag arrow check
+        assert_not_contains(HoverItem("item:ringHit3"), "hit counted")
     end)
 end)
