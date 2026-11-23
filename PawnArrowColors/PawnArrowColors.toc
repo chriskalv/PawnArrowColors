@@ -1,9 +1,9 @@
 ## Interface: 16001
 ## Interface-Forever: 16001
 ## Title: Pawn Arrow Colors
-## Notes: Colors Pawn's upgrade arrows in your bags: green when the item is an upgrade for your main Pawn scale, yellow when it is an upgrade only for another visible scale.
+## Notes: Colors Pawn's upgrade arrows (green for your main scale, yellow for other scales), counts hit only up to the hit cap, compares two-hand weapons with one-hand pairs, and says when a scale's weights are several levels old.
 ## Author: Zippy
-## Version: 1.0.1
+## Version: 1.1.0
 ## Dependencies: Pawn
 ## OptionalDeps: ElvUI
 ## SavedVariablesPerCharacter: PawnArrowColorsCharDB

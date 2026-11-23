@@ -2,17 +2,20 @@
 --
 -- Saved settings, access to Pawn, the decision "main scale or another scale" per item link with its
 -- cache, and painting one arrow texture yellow or back to its original state. The bag hooks live in
--- Bags.lua, the slash command and the settings page in Options.lua.
+-- Bags.lua, the scale age hint in Age.lua, the hit cap in HitCap.lua, the adjusted upgrade answer in
+-- Upgrade.lua, the weapon pairs in Pairs.lua, the slash command and the settings page in Options.lua.
 --
 -- Rule: an arrow that Pawn (Blizzard bags) or ElvUI (ElvUI bags) shows stays as it is (green) when the
 -- item is an upgrade for the main scale; it turns yellow when the item is not an upgrade for the main
--- scale, that is an upgrade only for other visible scales (or an item level upgrade only). The addon
--- never shows or hides an arrow itself.
+-- scale, that is an upgrade only for other visible scales (or an item level upgrade only). The colors
+-- never show or hide an arrow themselves. Since 1.1.0 the hit cap and the weapon pairs (HitCap.lua,
+-- Pairs.lua) change Pawn's own upgrade answer (Upgrade.lua); Pawn and ElvUI then show or hide their
+-- arrows by that answer, and the colors follow it like any other.
 
 local ADDON_NAME, ns = ...
 
 ns.name = ADDON_NAME
-ns.version = "1.0.1"
+ns.version = "1.1.0"
 
 -- The yellow arrow (64 x 64, drawn by tools/make_arrow.mjs). The arrow covers pixels 0..43 x 0..47 of
 -- the square, like ElvUI's arrow; on Blizzard slots only that part is shown, so that it fills the
