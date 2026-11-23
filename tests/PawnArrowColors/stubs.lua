@@ -24,11 +24,23 @@
 --     readyAfter  number of PawnIsReady calls after Pawn's login that still return nil
 --     missing     { FunctionName = true }: these Pawn functions do not exist
 --     advisor     false: Pawn's bag arrows (ShowBagUpgradeAdvisor) are off
+--     items       item link -> { inv = "INVTYPE_...", stats = {...}, enchant = {...}, name, id, minLevel,
+--                 rarity, canEquip = false }: with items, PawnGetItemData returns full item data and
+--                 PawnIsItemAnUpgrade compares with the equipped items like Pawn ("Versus equipped gear")
+--     equipped    inventory slot -> item link (GetInventoryItemLink("player", slot))
+--     tracking    true: Pawn's "Track for each scale" (PawnOptions.UpgradeTracking)
+--     options     scale name -> { DoNotShow1HUpgrades = true, DoNotShow2HUpgrades = true }
+--     never       item ID -> true: PawnNeverShowUpgradesFor
+--     answer      item link -> upgrade list Pawn returns as it is (a rule the stand-in does not model)
 --   elvui         false/nil, or { noFunction = true }: ElvUI and its bag module are loaded
 --   blizzard      false: no Blizzard container frames
 --   saved         PawnArrowColorsCharDB as saved before the login
 --   settings      false: no Settings API
 --   level         the character's level (UnitLevel("player"), default 20)
+--   hit           { melee, ranged, spell, rating }: the hit API of the client (GetHitModifier ... in
+--                 percent, GetCombatRatingBonus for the hit ratings); a value "secret" stands for a
+--                 secret value; without hit the client functions do not exist
+--   dualWield     false: CanDualWield() returns false
 
 REAL_PRINT = print
 unpack = unpack or table.unpack
@@ -70,6 +82,7 @@ local function installBasics()
         end,
     }
     issecretvalue = function(v) return STUB.secret ~= nil and v == STUB.secret end
+    STUB.secret = nil
 
     -- hooksecurefunc([table,] name, fn): post-hook, the original runs first and keeps its return values.
     hooksecurefunc = function(a, b, c)
@@ -281,11 +294,13 @@ local function installPawn(cfg)
             cfg.nolink[link] = cfg.nolink[link] - 1
             return { Link = nil }
         end
+        if cfg.items then return STUB.itemData(link) end
         return { Link = link }
     end
     -- Upgrade list for the visible scales the item is an upgrade for, sorted by display name.
     function api.PawnIsItemAnUpgrade(item)
         STUB.calls.upgrade = STUB.calls.upgrade + 1
+        if cfg.items then return STUB.modelIsItemAnUpgrade(item) end
         local link = item.Link
         if (cfg.unknown[link] or 0) > 0 then
             cfg.unknown[link] = cfg.unknown[link] - 1
@@ -304,7 +319,7 @@ local function installPawn(cfg)
         return list, cfg.ilvl[link] and 3 or nil
     end
     -- Like Pawn, the arrow check answers only once Pawn is initialized (before that: chat error, nil).
-    function api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link)
+    function api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link, checkLevel)
         if not initialized then return notInitialized("check to see if items are upgrades") end
         if (cfg.throttle[link] or 0) > 0 then
             cfg.throttle[link] = cfg.throttle[link] - 1
@@ -314,15 +329,24 @@ local function installPawn(cfg)
             cfg.nolink[link] = cfg.nolink[link] - 1
             return nil
         end
+        if cfg.items then
+            -- like Pawn (Pawn.lua:6055-6086): the level check, then PawnIsItemAnUpgrade by its global name
+            local def = cfg.items[link]
+            if not def then return false end
+            if checkLevel and STUB.level < (def.minLevel or 1) then return false end
+            local item = api.PawnGetItemData(link)
+            local up, ilvl = PawnIsItemAnUpgrade(item)
+            return up ~= nil or ilvl ~= nil
+        end
         local hasScale = false
         for _, name in ipairs(cfg.upgrades[link] or {}) do
             if visible(name) then hasScale = true end
         end
         return hasScale or cfg.ilvl[link] == true
     end
-    api.PawnShouldItemLinkHaveUpgradeArrow = function(link)
+    api.PawnShouldItemLinkHaveUpgradeArrow = function(link, checkLevel)
         STUB.calls.arrow = STUB.calls.arrow + 1
-        return api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link)
+        return api.PawnShouldItemLinkHaveUpgradeArrowUnbudgeted(link, checkLevel)
     end
     -- Pawn's bag reset: refreshes its own bag arrows (a new refresh number ends the per-button skip).
     function api.PawnResetBags()
@@ -330,9 +354,281 @@ local function installPawn(cfg)
         STUB.pawnRefreshCounter = (STUB.pawnRefreshCounter or 0) + 1
         if STUB.pawnBagRefresh then STUB.pawnBagRefresh() end
     end
+    installPawnModel(cfg, api, visible)
     for name, fn in pairs(api) do
         if not cfg.missing[name] then _G[name] = fn end
     end
+end
+
+
+-- ---------------------------------------------------------------------------------------------
+-- Pawn's item values and its comparison with the equipped items
+-- ---------------------------------------------------------------------------------------------
+
+-- Written for these tests from Pawn's behavior (Pawn 2.14.8, PawnGetItemData, PawnGetItemValue,
+-- PawnGetSingleValueFromItem, PawnIsItemAnUpgrade without "Track for each scale"): linear values,
+-- an X value (PawnIgnoreStatValue) makes the item worth 0, items are compared without enchantment,
+-- a two-hand weapon is never compared with one-hand items, rings against the weaker ring, an
+-- empty slot takes any item worth more than 0, an upgrade is at least 0.5% better.
+local SLOT1 = {
+    INVTYPE_HEAD = 1, INVTYPE_NECK = 2, INVTYPE_SHOULDER = 3, INVTYPE_CHEST = 5, INVTYPE_ROBE = 5, INVTYPE_WAIST = 6,
+    INVTYPE_LEGS = 7, INVTYPE_FEET = 8, INVTYPE_WRIST = 9, INVTYPE_HAND = 10, INVTYPE_FINGER = 11, INVTYPE_TRINKET = 13,
+    INVTYPE_CLOAK = 15, INVTYPE_WEAPON = 16, INVTYPE_SHIELD = 17, INVTYPE_2HWEAPON = 16, INVTYPE_WEAPONMAINHAND = 16,
+    INVTYPE_RANGED = 18, INVTYPE_RANGEDRIGHT = 18, INVTYPE_RELIC = 18, INVTYPE_THROWN = 18, INVTYPE_WEAPONOFFHAND = 17,
+    INVTYPE_HOLDABLE = 17,
+}
+local SLOT2 = { INVTYPE_FINGER = 12, INVTYPE_TRINKET = 14, INVTYPE_WEAPON = 17 }
+local ONE_HAND = { INVTYPE_WEAPON = true, INVTYPE_WEAPONMAINHAND = true, INVTYPE_WEAPONOFFHAND = true, INVTYPE_SHIELD = true, INVTYPE_HOLDABLE = true }
+
+function installPawnModel(cfg, api, visible)
+    PawnIgnoreStatValue = -1000000
+    PawnBigUpgradeThreshold = 100
+    PawnScaleBestGems = {}
+    for _, s in ipairs(cfg.scales) do
+        PawnScaleBestGems[s.name] = {}
+        local opts = cfg.options and cfg.options[s.name] or {}
+        PawnCommon.Scales[s.name].DoNotShow1HUpgrades = opts.DoNotShow1HUpgrades
+        PawnCommon.Scales[s.name].DoNotShow2HUpgrades = opts.DoNotShow2HUpgrades
+    end
+    PawnOptions = { UpgradeTracking = cfg.tracking and true or false }
+    PawnNeverShowUpgradesFor = cfg.never or {}
+    local items = cfg.items or {}
+    STUB.valueCalls = 0
+
+    local function base(link)
+        local def = items[link]
+        return def and def.base or link
+    end
+    local function merged(def, withEnchant)
+        local out = {}
+        for k, v in pairs(def.stats or {}) do out[k] = v end
+        if withEnchant then
+            for k, v in pairs(def.enchant or {}) do out[k] = (out[k] or 0) + v end
+        end
+        return out
+    end
+    STUB.itemData = function(link)
+        local def = items[link]
+        if not def then return nil end
+        local inv = def.inv == "INVTYPE_ROBE" and "INVTYPE_CHEST" or def.inv
+        return {
+            Link = link, Name = def.name or link, ID = def.id, InvType = inv, Rarity = def.rarity or 3,
+            Stats = merged(def, true), UnenchantedStats = merged(def, false), CanEquip = def.canEquip ~= false,
+        }
+    end
+
+    function api.PawnUnenchantItemLink(link, evenIfNotEnchanted)
+        local b = base(link)
+        if b ~= link then return b end
+        if evenIfNotEnchanted then return link end
+        return nil
+    end
+    function api.PawnGetItemValue(stats, _, _, scaleName)
+        local scale = PawnCommon.Scales[scaleName]
+        if not stats or not scale then return nil end
+        local total = 0
+        for stat, n in pairs(stats) do
+            local w = scale.Values[stat]
+            if w and w <= PawnIgnoreStatValue then return 0 end
+            if w then total = total + n * w end
+        end
+        return total
+    end
+    function api.PawnGetSingleValueFromItem(item, scaleName)
+        STUB.valueCalls = STUB.valueCalls + 1
+        return api.PawnGetItemValue(item.Stats, nil, nil, scaleName) or 0, api.PawnGetItemValue(item.UnenchantedStats, nil, nil, scaleName) or 0
+    end
+    function api.PawnIsScaleVisible(name) return visible(name) and true or false end
+    function api.PawnIsArmorBestTypeForPlayer(item)
+        local st = item.UnenchantedStats or {}
+        if st.IsPlate then return STUB.level >= 40 end
+        return true
+    end
+    function api.PawnGetItemDataForInventorySlot(slot, unenchanted)
+        local link = GetInventoryItemLink("player", slot)
+        if not link then return nil, false end
+        if unenchanted then link = base(link) end
+        return api.PawnGetItemData(link), true
+    end
+
+    STUB.modelIsItemAnUpgrade = function(Item)
+        -- cfg.answer[link]: Pawn answers with this list, standing for a rule of Pawn the addon does not
+        -- reproduce (the addon must then leave the answer alone)
+        if cfg.answer and cfg.answer[Item.Link] then return cfg.answer[Item.Link], nil, nil, nil, nil end
+        local t = Item.InvType
+        if not t or t == "" or t == "INVTYPE_BODY" or t == "INVTYPE_TABARD" or t == "INVTYPE_BAG" then return nil end
+        local skip = t == "INVTYPE_TRINKET" or SLOT1[t] == nil
+        local cand = api.PawnUnenchantItemLink(Item.Link, true)
+        if ONE_HAND[t] or t == "INVTYPE_2HWEAPON" or t == "INVTYPE_RANGED" then
+            local mainLink = GetInventoryItemLink("player", 16) or GetInventoryItemLink("player", 17)
+            local main = mainLink and api.PawnGetItemData(mainLink)
+            if main then
+                if main.InvType == "INVTYPE_2HWEAPON" then
+                    if ONE_HAND[t] then skip = true end
+                elseif t == "INVTYPE_2HWEAPON" then
+                    skip = true
+                end
+            end
+        end
+        local list, best, second
+        if not skip then
+            for _, s in ipairs(cfg.scales) do
+                local scale = PawnCommon.Scales[s.name]
+                if s.visible and not (scale.DoNotShow1HUpgrades and ONE_HAND[t]) and not (scale.DoNotShow2HUpgrades and t == "INVTYPE_2HWEAPON")
+                    and api.PawnIsArmorBestTypeForPlayer(Item) then
+                    local inv = t
+                    local two = t == "INVTYPE_FINGER"
+                    if t == "INVTYPE_WEAPON" then
+                        local x = scale.Values.IsOffHand
+                        two = x == nil or x > PawnIgnoreStatValue
+                    elseif t == "INVTYPE_SHIELD" or t == "INVTYPE_HOLDABLE" then
+                        inv = "INVTYPE_WEAPONOFFHAND"
+                    end
+                    local item1, had1 = api.PawnGetItemDataForInventorySlot(SLOT1[inv], true)
+                    if had1 and not item1 then return end
+                    local link1 = item1 and api.PawnUnenchantItemLink(item1.Link, true)
+                    if not two and link1 and cand == link1 then return end
+                    local item2, had2, link2
+                    if two then item2, had2 = api.PawnGetItemDataForInventorySlot(SLOT2[inv], true) end
+                    if had2 and not item2 then return end
+                    if item2 then link2 = api.PawnUnenchantItemLink(item2.Link, true) end
+                    local v1, v2
+                    if item1 then v1 = PawnNeverShowUpgradesFor[item1.ID] and math.huge or select(2, api.PawnGetSingleValueFromItem(item1, s.name)) end
+                    if item2 then v2 = PawnNeverShowUpgradesFor[item2.ID] and math.huge or select(2, api.PawnGetSingleValueFromItem(item2, s.name)) end
+                    local bestData
+                    if v1 and v2 then
+                        if v1 >= v2 then bestData = { v1, link1, nil, v2, link2 } else bestData = { v2, link2, nil, v1, link1 } end
+                    elseif two then
+                        bestData = nil
+                    elseif v1 then
+                        bestData = { v1, link1 }
+                    end
+                    local _, value = api.PawnGetSingleValueFromItem(Item, s.name)
+                    local entry
+                    if bestData then
+                        local bestValue = bestData[4] or bestData[1]
+                        if cand == bestData[2] then
+                            best = best or {}
+                            best[s.name] = true
+                        elseif cand == bestData[5] then
+                            second = second or {}
+                            second[s.name] = true
+                        elseif value > bestValue * 1.005 then
+                            entry = { ScaleName = s.name, LocalizedScaleName = s.label, PercentUpgrade = (value - bestValue) / (bestValue + 1e-10), ExistingItemLink = bestData[5] or bestData[2] }
+                        end
+                    elseif value > 0 then
+                        entry = { ScaleName = s.name, LocalizedScaleName = s.label, PercentUpgrade = PawnBigUpgradeThreshold }
+                    end
+                    if entry then
+                        list = list or {}
+                        list[#list + 1] = entry
+                    end
+                end
+            end
+        end
+        if list then table.sort(list, function(a, b) return string.lower(a.LocalizedScaleName) < string.lower(b.LocalizedScaleName) end) end
+        return list, cfg.ilvl[Item.Link] and 3 or nil, best, second, nil
+    end
+
+    -- Pawn's tooltip update: the item from the tooltip, its upgrade answer, one line per visible scale
+    -- with a value ("<scale>: <value>" and "(+N% upgrade)"), then Show.
+    PawnCommon.ShowUpgradesOnTooltips = cfg.tooltipUpgrades ~= false
+    function api.PawnGetItemLinkFromTooltipNameAndMethod(tooltipName, methodName, param1)
+        if methodName == "SetHyperlink" and param1 then return param1 end
+        local tooltip = _G[tooltipName]
+        return tooltip and tooltip.link
+    end
+    function api.PawnUpdateTooltip(tooltipName, methodName, param1, ...)
+        local tooltip = _G[tooltipName]
+        local link = api.PawnGetItemLinkFromTooltipNameAndMethod(tooltipName, methodName, param1, ...)
+        local item = link and api.PawnGetItemData(link)
+        if not item then return end
+        local upgrades
+        if PawnCommon.ShowUpgradesOnTooltips then upgrades = PawnIsItemAnUpgrade(item) end
+        for _, s in ipairs(cfg.scales) do
+            if s.visible then
+                local _, value = api.PawnGetSingleValueFromItem(item, s.name)
+                if value > 0 then
+                    local text = string.format("%s: %.1f", s.label, value)
+                    for _, u in ipairs(upgrades or {}) do
+                        if u.ScaleName == s.name then
+                            text = text .. (u.PercentUpgrade >= PawnBigUpgradeThreshold and " (upgrade)" or string.format(" (+%.0f%% upgrade)", 100 * u.PercentUpgrade))
+                        end
+                    end
+                    tooltip:AddLine(text)
+                end
+            end
+        end
+        tooltip:Show()
+    end
+end
+
+-- A tooltip like GameTooltip: AddLine collects the lines, Show counts.
+function NewTooltip(name)
+    local t = { lines = {}, shown = 0 }
+    function t:AddLine(text) self.lines[#self.lines + 1] = text end
+    function t:Show() self.shown = self.shown + 1 end
+    function t:ClearLines() self.lines = {} end
+    function t:Text() return table.concat(self.lines, "\n") end
+    _G[name] = t
+    return t
+end
+
+-- Shows the tooltip of an item the way Pawn's hook on SetHyperlink does.
+function HoverItem(link)
+    local tip = GameTooltip or NewTooltip("GameTooltip")
+    tip:ClearLines()
+    tip.link = link
+    PawnUpdateTooltip("GameTooltip", "SetHyperlink", link)
+    return tip:Text()
+end
+
+-- The client's hit functions and the equipped items.
+local function installCharacter(config)
+    STUB.equipped = config.equipped or (type(config.pawn) == "table" and config.pawn.equipped) or {}
+    GetInventoryItemLink = function(unit, slot)
+        if unit ~= "player" then return nil end
+        return STUB.equipped[slot]
+    end
+    local items = type(config.pawn) == "table" and config.pawn.items or {}
+    C_Item = {
+        GetItemInfoInstant = function(link)
+            local def = items[link]
+            if not def then return nil end
+            return def.id, nil, nil, def.inv
+        end,
+        GetItemInfo = function(link)
+            local def = items[link]
+            if not def then return nil end
+            return def.name or link, link, def.rarity or 3, 10, def.minLevel or 1
+        end,
+    }
+    CanDualWield = function() return config.dualWield ~= false end
+    STUB.hit = config.hit
+    STUB.secret = STUB.secret or {}
+    if config.hit then
+        local function read(hand)
+            return function()
+                local v = STUB.hit[hand]
+                if v == "secret" then return STUB.secret end
+                return v or 0
+            end
+        end
+        GetHitModifier = read("melee")
+        GetRangedHitModifier = read("ranged")
+        GetSpellHitModifier = read("spell")
+        GetCombatRatingBonus = function()
+            local v = STUB.hit.rating
+            if v == "secret" then return STUB.secret end
+            return v or 0
+        end
+    end
+end
+
+-- Puts an item into an inventory slot and fires the client's event.
+function Equip(slot, link)
+    STUB.equipped[slot] = link
+    FireEvent("PLAYER_EQUIPMENT_CHANGED", slot, link == nil)
 end
 
 -- Stand-in for Pawn's bag integration with Blizzard's bags: post-hooks on UpdateItems of the
@@ -562,6 +858,7 @@ end
 
 function InstallStubs(config)
     installBasics()
+    installCharacter(config)
     STUB.level = config.level or 20
     UnitLevel = function(unit)
         if unit == "player" then return STUB.level end

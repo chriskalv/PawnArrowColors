@@ -21,16 +21,33 @@ import luaparse from 'luaparse';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const addonDir = path.join(repoRoot, 'PawnArrowColors');
 
-// Public names of Pawn the addon may use. Sources: Pawn 2.14.4, paths inside the AddOns/Pawn folder.
+// Public names of Pawn the addon may use. Sources: Pawn 2.14.8 (Forever), paths inside the AddOns/Pawn
+// folder. Each is a global of Pawn (no "local" in front), defined when Pawn reports itself ready through
+// PawnIsReady. The two functions the addon hooks or replaces are called by Pawn through their global
+// names, so the hook and the replacement reach Pawn's own calls: PawnIsItemAnUpgrade from
+// PawnUpdateTooltip (Pawn.lua:1813) and PawnShouldItemLinkHaveUpgradeArrowUnbudgeted (Pawn.lua:6069,
+// 6079), PawnUpdateTooltip from Pawn's tooltip hooks (Pawn.lua:273-450, e.g. 279, 293).
 export const PAWN_PUBLIC = new Map([
-  ['PawnIsReady', 'Pawn.lua:4953 function PawnIsReady() (section "Pawn API"; returns the local PawnIsInitialized)'],
-  ['PawnGetItemData', 'Pawn.lua:1328 function PawnGetItemData(ItemLink)'],
-  ['PawnIsItemAnUpgrade', 'Pawn.lua:3590 function PawnIsItemAnUpgrade(Item, DoNotRescan)'],
-  ['PawnGetAllScalesEx', 'Pawn.lua:5227 function PawnGetAllScalesEx()'],
-  ['PawnResetBags', 'Pawn.lua:1142 function PawnResetBags()'],
-  ['PawnCommon', 'Pawn.toc:6 ## SavedVariables: PawnCommon; created in Pawn.lua:582'],
+  ['PawnIsReady', 'Pawn.lua:4995 function PawnIsReady() (section "Pawn API"; returns the local PawnIsInitialized)'],
+  ['PawnGetItemData', 'Pawn.lua:1370 function PawnGetItemData(ItemLink)'],
+  ['PawnIsItemAnUpgrade', 'Pawn.lua:3633 function PawnIsItemAnUpgrade(Item, DoNotRescan); replaced by a wrapper (Upgrade.lua)'],
+  ['PawnGetAllScalesEx', 'Pawn.lua:5269 function PawnGetAllScalesEx()'],
+  ['PawnResetBags', 'Pawn.lua:1184 function PawnResetBags()'],
+  ['PawnCommon', 'Pawn.toc:6 ## SavedVariables: PawnCommon; created in Pawn.lua:621; Scales[name].Values, LocalizedName, DoNotShow1HUpgrades, DoNotShow2HUpgrades'],
+  ['PawnOptions', 'Pawn.toc:7 ## SavedVariablesPerCharacter: PawnOptions; created in Pawn.lua:622; UpgradeTracking read in Pawn.lua:3693'],
+  ['PawnGetSingleValueFromItem', 'Pawn.lua:1742 function PawnGetSingleValueFromItem(Item, ScaleName)'],
+  ['PawnGetItemDataForInventorySlot', 'Pawn.lua:1701 function PawnGetItemDataForInventorySlot(Slot, Unenchanted, UnitName)'],
+  ['PawnUnenchantItemLink', 'Pawn.lua:3072 function PawnUnenchantItemLink(ItemLink, EvenIfNotEnchanted)'],
+  ['PawnIsScaleVisible', 'Pawn.lua:5546 function PawnIsScaleVisible(ScaleName)'],
+  ['PawnIsArmorBestTypeForPlayer', 'Pawn.lua:4352 function PawnIsArmorBestTypeForPlayer(Item)'],
+  ['PawnGetItemValue', 'Pawn.lua:2790 function PawnGetItemValue(Item, ItemLevel, SocketBonus, ScaleName, DebugMessages, NoNormalization, NoReforging)'],
+  ['PawnScaleBestGems', 'Pawn.lua:62 PawnScaleBestGems = { }; filled per scale in Pawn.lua:1222-1223'],
+  ['PawnIgnoreStatValue', 'Pawn.lua:100 PawnIgnoreStatValue = -1000000'],
+  ['PawnBigUpgradeThreshold', 'Pawn.lua:101 PawnBigUpgradeThreshold = 100'],
+  ['PawnNeverShowUpgradesFor', 'ItemIDs.lua:11 PawnNeverShowUpgradesFor ='],
+  ['PawnUpdateTooltip', 'Pawn.lua:1774 function PawnUpdateTooltip(TooltipName, MethodName, Param1, ...); secure post-hook (Upgrade.lua)'],
+  ['PawnGetItemLinkFromTooltipNameAndMethod', 'Pawn.lua:1633 function PawnGetItemLinkFromTooltipNameAndMethod(TooltipName, MethodName, Param1, ...)'],
 ]);
-
 // The addon's own names that start with Pawn.
 export const OWN = new Map([
   ['PawnArrowColorsCharDB', 'PawnArrowColors.toc ## SavedVariablesPerCharacter'],

@@ -13,4 +13,6 @@
 Core.lua
 Bags.lua
 Age.lua
+HitCap.lua
+Upgrade.lua
 Options.lua
